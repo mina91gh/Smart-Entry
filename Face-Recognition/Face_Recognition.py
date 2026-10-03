@@ -11,7 +11,7 @@ from model import FaceEmbedding
 # Settings
 # =========================
 
-#RTSP_URL = "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
+RTSP_URL = "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
 
 WINDOW_NAME = "Smart Entry System"
 
@@ -41,7 +41,7 @@ print(f"Loaded {len(known_embeddings)} face embeddings from database")
 # Camera
 # =========================
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(RTSP_URL)
 
 if not cap.isOpened():
     print("ERROR: Cannot connect to camera")

@@ -22,6 +22,7 @@ WINDOW_NAME = "Smart Entry System"
 # Lower value = stricter recognition
 TOLERANCE = 0.5
 
+RTSP_URL = "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
 
 # ==================================================
 # Load known faces from database
@@ -55,7 +56,7 @@ print(
 # Camera
 # ==================================================
 
-cap = cv2.VideoCapture(0)
+cap = cv2.VideoCapture(RTSP_URL)
 
 
 if not cap.isOpened():

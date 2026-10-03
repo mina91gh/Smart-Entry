@@ -3,3 +3,4 @@ smile-env/
 __pycache__/
 *.pyc
 .env
+Face-Collection/dataset/
