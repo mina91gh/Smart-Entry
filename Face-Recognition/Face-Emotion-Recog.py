@@ -8,7 +8,9 @@ import psutil
 from threading import Thread, Event
 from queue import Queue, Empty
 
-from model import FaceEmbedding
+from datetime import datetime
+
+from model import FaceEmbedding, EntryLog
 from Emotion_Detection import (
     detect_emotion,
     close_emotion_detector
@@ -37,6 +39,8 @@ EMOTION_INTERVAL = 5
 # Resize scale for AI processing
 SCALE = 0.5
 
+ENTRY_COOLDOWN = 30
+
 # RTSP camera
 RTSP_URL = "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
 
@@ -59,6 +63,8 @@ stop_event = Event()
 known_embeddings = []
 known_names = []
 
+known_person_ids = []
+last_entry_times = {}
 
 for emb in FaceEmbedding.select():
 
@@ -72,8 +78,9 @@ for emb in FaceEmbedding.select():
     known_names.append(
         emb.person.name
     )
-
-
+    known_person_ids.append(
+        emb.person.id
+    )
 print(
     f"Loaded {len(known_embeddings)} "
     f"face embeddings from database"
@@ -401,6 +408,7 @@ def ai_worker():
 
                 best_distance = None
 
+                best_person_id = None
 
                 if len(known_embeddings) > 0:
 
@@ -434,12 +442,16 @@ def ai_worker():
                             ]
                         )
 
+                        best_person_id = known_person_ids[best_index]
+
 
                 face_results.append({
 
                     "name": best_name,
 
-                    "distance": best_distance
+                    "distance": best_distance,
+
+                    "person_id": best_person_id
                 })
 
 
@@ -552,6 +564,43 @@ def ai_worker():
                 emotion_score
             )
 
+
+            # ==================================================
+            # Entry Logging
+            # ==================================================
+
+            if best_name != "Unknown" and emotion == "smile":
+
+                now = time.time()
+
+                last_entry = last_entry_times.get(
+                    best_name,
+                    0
+                )
+
+                if now - last_entry >= ENTRY_COOLDOWN:
+
+                    current_datetime = datetime.now()
+
+                    EntryLog.create(
+
+                        person_id=result["person_id"],
+
+                        entry_date=current_datetime.date(),
+
+                        #entry_time=current_datetime.time()
+                        entry_time=current_datetime.replace(
+                            microsecond=0
+                        ).time()
+                    )
+
+                    last_entry_times[best_name] = now
+
+                    print(
+                        f"Entry logged: "
+                        f"{best_name} - "
+                        f"{current_datetime}"
+                    )
 
         # ==================================================
         # Prepare Result
