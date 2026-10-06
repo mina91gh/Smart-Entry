@@ -1,9 +1,9 @@
-
 import time
 
 import cv2
 import face_recognition
 import numpy as np
+import psutil
 
 from model import FaceEmbedding
 from Emotion_Detection import (
@@ -22,7 +22,21 @@ WINDOW_NAME = "Smart Entry System"
 # Lower value = stricter recognition
 TOLERANCE = 0.5
 
+# Run face detection every N frames
+DETECTION_INTERVAL = 8
+
+# Run face recognition every N frames
+RECOGNITION_INTERVAL = 10
+
+# Run emotion detection every N frames
+EMOTION_INTERVAL = 10
+
+# Resize scale for AI processing
+SCALE = 0.5
+
+# RTSP camera
 RTSP_URL = "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
+
 
 # ==================================================
 # Load known faces from database
@@ -65,6 +79,32 @@ if not cap.isOpened():
     exit()
 
 
+# ==================================================
+# CPU
+# ==================================================
+
+process = psutil.Process()
+
+process.cpu_percent(interval=None)
+
+
+# ==================================================
+# Variables
+# ==================================================
+
+frame_count = 0
+
+face_locations = []
+
+face_encodings = []
+
+face_results = []
+
+emotion_results = {}
+
+trackers = []
+
+
 previous_time = time.time()
 
 
@@ -73,6 +113,13 @@ previous_time = time.time()
 # ==================================================
 
 while True:
+
+    # ------------------------------------------------
+    # CPU usage
+    # ------------------------------------------------
+
+    cpu = process.cpu_percent(interval=None)
+
 
     # ------------------------------------------------
     # Read frame
@@ -87,78 +134,251 @@ while True:
         break
 
 
-    # ------------------------------------------------
-    # Convert BGR → RGB
-    # face_recognition needs RGB
-    # ------------------------------------------------
+    frame_count += 1
 
-    rgb = cv2.cvtColor(
+
+    # ==================================================
+    # Resize frame for AI processing
+    # ==================================================
+
+    small_frame = cv2.resize(
         frame,
+        None,
+        fx=SCALE,
+        fy=SCALE
+    )
+
+
+    small_rgb = cv2.cvtColor(
+        small_frame,
         cv2.COLOR_BGR2RGB
     )
 
 
-    # ------------------------------------------------
-    # Detect faces
-    # ------------------------------------------------
+    # ==================================================
+    # Face Detection + Tracker
+    # ==================================================
 
-    face_locations = face_recognition.face_locations(
-        rgb
-    )
+    if frame_count % DETECTION_INTERVAL == 0:
+
+        # ----------------------------------------------
+        # Face Detection
+        # ----------------------------------------------
+
+        small_face_locations = (
+            face_recognition.face_locations(
+                small_rgb
+            )
+        )
 
 
-    # ------------------------------------------------
-    # Calculate face encodings
-    # ------------------------------------------------
+        # ----------------------------------------------
+        # Convert coordinates
+        # small image → original frame
+        # ----------------------------------------------
 
-    face_encodings = face_recognition.face_encodings(
-        rgb,
-        face_locations
-    )
+        face_locations = [
+            (
+                int(top / SCALE),
+                int(right / SCALE),
+                int(bottom / SCALE),
+                int(left / SCALE)
+            )
+            for top, right, bottom, left
+            in small_face_locations
+        ]
+
+
+        # ----------------------------------------------
+        # Create new trackers
+        # ----------------------------------------------
+
+        trackers = []
+
+
+        for top, right, bottom, left in face_locations:
+
+            width = right - left
+            height = bottom - top
+
+
+            if width <= 0 or height <= 0:
+                continue
+
+
+            tracker = cv2.TrackerKCF_create()
+
+
+            tracker.init(
+                frame,
+                (
+                    left,
+                    top,
+                    width,
+                    height
+                )
+            )
+
+
+            trackers.append(tracker)
+
+
+    else:
+
+        # ----------------------------------------------
+        # Update trackers
+        # ----------------------------------------------
+
+        new_face_locations = []
+
+
+        for tracker in trackers:
+
+            success, box = tracker.update(frame)
+
+
+            if success:
+
+                x, y, w, h = [
+                    int(value)
+                    for value in box
+                ]
+
+
+                top = max(
+                    0,
+                    y
+                )
+
+                left = max(
+                    0,
+                    x
+                )
+
+                bottom = min(
+                    frame.shape[0],
+                    y + h
+                )
+
+                right = min(
+                    frame.shape[1],
+                    x + w
+                )
+
+
+                if right > left and bottom > top:
+
+                    new_face_locations.append(
+                        (
+                            top,
+                            right,
+                            bottom,
+                            left
+                        )
+                    )
+
+
+        face_locations = new_face_locations
 
 
     # ==================================================
-    # Process each face
+    # Face Recognition
     # ==================================================
 
-    for (
-        (top, right, bottom, left),
-        encoding
-    ) in zip(
-        face_locations,
-        face_encodings
+    if (
+        frame_count % RECOGNITION_INTERVAL == 0
+        and len(face_locations) > 0
     ):
 
-        # ==============================================
-        # Face Recognition
-        # ==============================================
+        # ----------------------------------------------
+        # Convert original coordinates
+        # → small image coordinates
+        # ----------------------------------------------
 
-        best_name = "Unknown"
-        best_distance = None
+        small_locations_for_encoding = [
 
-
-        if len(known_embeddings) > 0:
-
-            distances = face_recognition.face_distance(
-                known_embeddings,
-                encoding
+            (
+                int(top * SCALE),
+                int(right * SCALE),
+                int(bottom * SCALE),
+                int(left * SCALE)
             )
 
+            for top, right, bottom, left
+            in face_locations
+        ]
 
-            best_index = int(
-                np.argmin(distances)
-            )
+
+        # ----------------------------------------------
+        # Face Encoding
+        # ----------------------------------------------
+
+        face_encodings = face_recognition.face_encodings(
+            small_rgb,
+            small_locations_for_encoding
+        )
 
 
-            if distances[best_index] <= TOLERANCE:
+        # ----------------------------------------------
+        # Recognition Results
+        # ----------------------------------------------
 
-                best_name = known_names[
-                    best_index
-                ]
+        face_results = []
 
-                best_distance = distances[
-                    best_index
-                ]
+
+        for encoding in face_encodings:
+
+            best_name = "Unknown"
+            best_distance = None
+
+
+            if len(known_embeddings) > 0:
+
+                distances = face_recognition.face_distance(
+                    known_embeddings,
+                    encoding
+                )
+
+
+                best_index = int(
+                    np.argmin(distances)
+                )
+
+
+                if distances[best_index] <= TOLERANCE:
+
+                    best_name = known_names[
+                        best_index
+                    ]
+
+                    best_distance = float(
+                        distances[best_index]
+                    )
+
+
+            face_results.append({
+                "name": best_name,
+                "distance": best_distance
+            })
+
+
+    # ==================================================
+    # Process Each Face
+    # ==================================================
+
+    for face_index, (
+        (top, right, bottom, left),
+        result
+    ) in enumerate(
+        zip(
+            face_locations,
+            face_results
+        )
+    ):
+
+        best_name = result["name"]
+
+        best_distance = result["distance"]
 
 
         # ==============================================
@@ -169,46 +389,68 @@ while True:
         emotion_score = 0.0
 
 
-        # فقط برای افراد شناخته‌شده Smile را بررسی می‌کنیم
+        # Only check smile for known people
         if best_name != "Unknown":
 
-            # Make sure face coordinates
-            # are inside the frame
+            if frame_count % EMOTION_INTERVAL == 0:
 
-            top_crop = max(
-                0,
-                top
-            )
+                # Make sure coordinates are inside frame
 
-            bottom_crop = min(
-                frame.shape[0],
-                bottom
-            )
-
-            left_crop = max(
-                0,
-                left
-            )
-
-            right_crop = min(
-                frame.shape[1],
-                right
-            )
-
-
-            # Crop the detected face
-
-            face_crop = frame[
-                top_crop:bottom_crop,
-                left_crop:right_crop
-            ]
-
-
-            if face_crop.size > 0:
-
-                emotion, emotion_score = detect_emotion(
-                    face_crop
+                top_crop = max(
+                    0,
+                    top
                 )
+
+                bottom_crop = min(
+                    frame.shape[0],
+                    bottom
+                )
+
+                left_crop = max(
+                    0,
+                    left
+                )
+
+                right_crop = min(
+                    frame.shape[1],
+                    right
+                )
+
+
+                # Crop face
+
+                face_crop = frame[
+                    top_crop:bottom_crop,
+                    left_crop:right_crop
+                ]
+
+
+                if face_crop.size > 0:
+
+                    emotion, emotion_score = (
+                        detect_emotion(
+                            face_crop
+                        )
+                    )
+
+
+                    emotion_results[face_index] = (
+                        emotion,
+                        emotion_score
+                    )
+
+
+            else:
+
+                # Use previous emotion result
+
+                if face_index in emotion_results:
+
+                    emotion, emotion_score = (
+                        emotion_results[
+                            face_index
+                        ]
+                    )
 
 
         # ==============================================
@@ -221,11 +463,15 @@ while True:
 
         elif emotion == "smile":
 
-            message = f"Hi {best_name} - Welcome!"
+            message = (
+                f"Hi {best_name} - Welcome!"
+            )
 
         else:
 
-            message = f"Hi {best_name} - Smile Please!"
+            message = (
+                f"Hi {best_name} - Smile Please!"
+            )
 
 
         # ==============================================
@@ -262,7 +508,7 @@ while True:
 
 
         # ==============================================
-        # Draw Message Above Face Box
+        # Draw Message
         # ==============================================
 
         cv2.putText(
@@ -283,31 +529,24 @@ while True:
 
 
     # ==================================================
-    # FPS
+    # CPU Display
     # ==================================================
 
-    current_time = time.time()
-
-
-    fps = 1 / (
-        current_time -
-        previous_time
-    )
-
-
-    previous_time = current_time
-
-    '''
     cv2.putText(
         frame,
-        f"FPS: {fps:.1f}",
+        f"CPU: {cpu:.1f}%",
         (20, 30),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.8,
-        (0, 255, 0),
+        0.7,
+        (255, 255, 255),
         2
     )
-    '''
+
+
+    
+
+   
+
 
     # ==================================================
     # Display
