@@ -71,7 +71,20 @@ class FaceEmbedding(BaseModel):
     class Meta:
         table_name = "face_encodings"
 
+class EntryLog(BaseModel):
+    """Log of a person's entry."""
 
+    person = ForeignKeyField(
+        Person,
+        backref="entry_logs",
+        on_delete="CASCADE",
+    )
+
+    entry_date = DateField()
+    entry_time = TimeField()
+
+    class Meta:
+        table_name = "entry_logs"
 # =========================
 # Init
 # =========================
@@ -85,11 +98,11 @@ def init_db():
 
     # Both tables are listed: peewee does NOT create the Person
     # table automatically just because it is referenced by a FK.
-    db.create_tables([Person, FaceEmbedding], safe=True)
+    db.create_tables([Person, FaceEmbedding, EntryLog], safe=True)
 
     db.close()
 
 
 if __name__ == "__main__":
     init_db()
-    print("Tables ready: persons, face_encodings")
+    print("Tables ready: persons, face_encodings, entrylogs")
