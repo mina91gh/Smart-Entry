@@ -71,6 +71,7 @@ class FaceEmbedding(BaseModel):
     class Meta:
         table_name = "face_encodings"
 
+
 class EntryLog(BaseModel):
     """Log of a person's entry."""
 
@@ -85,6 +86,8 @@ class EntryLog(BaseModel):
 
     class Meta:
         table_name = "entry_logs"
+
+
 # =========================
 # Init
 # =========================

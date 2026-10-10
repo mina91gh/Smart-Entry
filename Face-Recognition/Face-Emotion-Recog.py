@@ -393,6 +393,9 @@ def ai_worker():
                     small_locations_for_encoding
                 )
             )
+            for encoding in face_encodings:
+                print("Embedding shape:", encoding.shape)
+                print("Embedding dimensions:", len(encoding))
 
 
             # ----------------------------------------------
