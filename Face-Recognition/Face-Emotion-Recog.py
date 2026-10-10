@@ -269,7 +269,8 @@ def ai_worker():
                     continue
 
 
-                tracker = cv2.TrackerKCF_create()
+                #tracker = cv2.TrackerKCF_create()
+                tracker = cv2.legacy.TrackerKCF_create()
 
 
                 tracker.init(
@@ -386,13 +387,15 @@ def ai_worker():
             # ----------------------------------------------
             # Face Encoding
             # ----------------------------------------------
-
+            print("A: Before face_encodings", flush=True)
             face_encodings = (
                 face_recognition.face_encodings(
                     small_rgb,
                     small_locations_for_encoding
                 )
             )
+
+            print("B: After face_encodings", flush=True)
             for encoding in face_encodings:
                 print("Embedding shape:", encoding.shape)
                 print("Embedding dimensions:", len(encoding))
