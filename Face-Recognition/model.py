@@ -52,8 +52,9 @@ class Person(BaseModel):
         table_name = "persons"
 
 
+
 class FaceEmbedding(BaseModel):
-    """One face embedding per registered photo of a person."""
+    """Stores old and new face embeddings during migration."""
 
     person = ForeignKeyField(
         Person,
@@ -61,16 +62,38 @@ class FaceEmbedding(BaseModel):
         on_delete="CASCADE",
     )
 
-    # face_recognition library (dlib) -> 128-dim embeddings
-    embedding = VectorField(
-        dimensions=128
-    )
+    # Old embeddings: face_recognition / dlib
+    embedding = VectorField(dimensions=128)
+
+    # New embeddings: InsightFace buffalo_l
+    embedding_512 = VectorField(dimensions=512, null=True)
 
     created_at = DateTimeField(default=datetime.now)
 
     class Meta:
         table_name = "face_encodings"
 
+
+class FaceEmbedding512(BaseModel):
+    """InsightFace 512-dimensional embeddings."""
+
+    person = ForeignKeyField(
+        Person,
+        backref="embeddings_512",
+        on_delete="CASCADE",
+    )
+
+    image_name = CharField(max_length=255)
+
+    embedding = VectorField(dimensions=512)
+
+    created_at = DateTimeField(default=datetime.now)
+
+    class Meta:
+        table_name = "face_encodings_512"
+        indexes = (
+            (("person", "image_name"), True),
+        )
 
 class EntryLog(BaseModel):
     """Log of a person's entry."""
@@ -101,7 +124,7 @@ def init_db():
 
     # Both tables are listed: peewee does NOT create the Person
     # table automatically just because it is referenced by a FK.
-    db.create_tables([Person, FaceEmbedding, EntryLog], safe=True)
+    db.create_tables([Person, FaceEmbedding, FaceEmbedding512, EntryLog], safe=True)
 
     db.close()
 

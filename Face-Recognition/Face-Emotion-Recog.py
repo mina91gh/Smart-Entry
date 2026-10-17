@@ -1,20 +1,59 @@
-import time
 
+import time
 import cv2
-import face_recognition
 import numpy as np
 import psutil
 
 from threading import Thread, Event
 from queue import Queue, Empty
-
 from datetime import datetime
 
-from model import FaceEmbedding, EntryLog
+from insightface.app import FaceAnalysis
+
+from model import db, FaceEmbedding512, EntryLog
 from Emotion_Detection import (
     detect_emotion,
-    close_emotion_detector
+    close_emotion_detector,
 )
+
+import os
+import sys
+from pathlib import Path
+
+# Load NVIDIA CUDA and cuDNN DLL directories
+_dll_handles = []
+
+_nvidia_dir = (
+    Path(sys.prefix)
+    / "Lib"
+    / "site-packages"
+    / "nvidia"
+)
+
+for _sub in (
+    "cudnn/bin",
+    "cublas/bin",
+    "cuda_runtime/bin",
+    "cuda_nvrtc/bin",
+    "cuda_nvjitlink/bin",
+):
+    _dll_path = _nvidia_dir / _sub
+
+    if _dll_path.exists():
+        os.environ["PATH"] = (
+            str(_dll_path)
+            + os.pathsep
+            + os.environ.get("PATH", "")
+        )
+        _dll_handles.append(
+            os.add_dll_directory(str(_dll_path))
+        )
+
+import onnxruntime as ort
+
+ort.preload_dlls(directory="")
+
+
 
 
 # ==================================================
@@ -23,26 +62,31 @@ from Emotion_Detection import (
 
 WINDOW_NAME = "Smart Entry System"
 
-# Face recognition tolerance
-# Lower value = stricter recognition
-TOLERANCE = 0.5
+# Initial cosine similarity threshold.
+# Must be calibrated using real camera footage.
+SIMILARITY_THRESHOLD = 0.45
 
-# Run face detection every N frames
 DETECTION_INTERVAL = 5
-
-# Run face recognition every N frames
 RECOGNITION_INTERVAL = 5
-
-# Run emotion detection every N frames
 EMOTION_INTERVAL = 5
 
-# Resize scale for AI processing
 SCALE = 0.5
-
 ENTRY_COOLDOWN = 30
 
-# RTSP camera
-RTSP_URL = "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
+RTSP_URL = (
+    "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
+)
+
+# CPU only until the cuDNN issue is resolved.
+FACE_APP = FaceAnalysis(
+    name="buffalo_l",
+    providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+)
+
+FACE_APP.prepare(
+    ctx_id=0,
+    det_size=(640, 640),
+)
 
 
 # ==================================================
@@ -50,41 +94,112 @@ RTSP_URL = "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
 # ==================================================
 
 frame_queue = Queue(maxsize=1)
-
 result_queue = Queue(maxsize=1)
-
 stop_event = Event()
 
 
 # ==================================================
-# Load known faces from database
+# Load 512D Embeddings from Database
 # ==================================================
 
 known_embeddings = []
 known_names = []
-
 known_person_ids = []
-last_entry_times = {}
 
-for emb in FaceEmbedding.select():
+for item in FaceEmbedding512.select():
 
-    known_embeddings.append(
-        np.array(
-            emb.embedding,
-            dtype=np.float64
+    embedding = np.asarray(
+        item.embedding,
+        dtype=np.float32,
+    )
+
+    if embedding.shape != (512,):
+        print(
+            f"Skipping invalid embedding: "
+            f"{item.image_name}, shape={embedding.shape}"
         )
+        continue
+
+    known_embeddings.append(embedding)
+    known_names.append(item.person.name)
+    known_person_ids.append(item.person.id)
+
+
+if known_embeddings:
+    known_embeddings = np.stack(known_embeddings)
+else:
+    known_embeddings = np.empty(
+        (0, 512),
+        dtype=np.float32,
     )
 
-    known_names.append(
-        emb.person.name
-    )
-    known_person_ids.append(
-        emb.person.id
-    )
 print(
     f"Loaded {len(known_embeddings)} "
-    f"face embeddings from database"
+    f"InsightFace embeddings from database"
 )
+
+
+# ==================================================
+# Face Recognition using Cosine Similarity
+# ==================================================
+
+def recognize_face(embedding):
+
+    embedding = np.asarray(
+        embedding,
+        dtype=np.float32,
+    )
+
+    if (
+        embedding.shape != (512,)
+        or len(known_embeddings) == 0
+    ):
+        return {
+            "name": "Unknown",
+            "distance": None,
+            "person_id": None,
+        }
+
+    # Normalize vectors before cosine comparison.
+    query_norm = np.linalg.norm(embedding)
+
+    if query_norm == 0:
+        return {
+            "name": "Unknown",
+            "distance": None,
+            "person_id": None,
+        }
+
+    query = embedding / query_norm
+
+    known_norms = np.linalg.norm(
+        known_embeddings,
+        axis=1,
+        keepdims=True,
+    )
+
+    normalized_known = known_embeddings / np.maximum(
+        known_norms,
+        1e-12,
+    )
+
+    similarities = normalized_known @ query
+
+    best_index = int(np.argmax(similarities))
+    best_similarity = float(similarities[best_index])
+
+    if best_similarity < SIMILARITY_THRESHOLD:
+        return {
+            "name": "Unknown",
+            "distance": 1.0 - best_similarity,
+            "person_id": None,
+        }
+
+    return {
+        "name": known_names[best_index],
+        "distance": 1.0 - best_similarity,
+        "person_id": known_person_ids[best_index],
+    }
 
 
 # ==================================================
@@ -95,48 +210,39 @@ def camera_reader():
 
     cap = cv2.VideoCapture(RTSP_URL)
 
-    cap.set(
-        cv2.CAP_PROP_BUFFERSIZE,
-        1
-    )
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
     if not cap.isOpened():
-
         print("ERROR: Cannot connect to camera")
-
         stop_event.set()
-
         return
 
     print("Camera connected")
 
-    while not stop_event.is_set():
+    try:
+        while not stop_event.is_set():
 
-        ret, frame = cap.read()
+            ret, frame = cap.read()
 
-        if not ret:
+            if not ret:
+                time.sleep(0.05)
+                continue
 
-            print("ERROR: Cannot read frame")
-
-            continue
-
-        try:
-
-            # Remove old frame
+            # Keep only the newest frame.
             if frame_queue.full():
+                try:
+                    frame_queue.get_nowait()
+                except Empty:
+                    pass
 
-                frame_queue.get_nowait()
+            try:
+                frame_queue.put_nowait(frame)
+            except:
+                pass
 
-            # Add newest frame
-            frame_queue.put_nowait(frame)
-
-        except:
-
-            pass
-
-    cap.release()
-
-    print("Camera thread stopped")
+    finally:
+        cap.release()
+        print("Camera thread stopped")
 
 
 # ==================================================
@@ -148,875 +254,382 @@ def ai_worker():
     print("AI thread started")
 
     process = psutil.Process()
-
-    process.cpu_percent(
-        interval=None
-    )
+    process.cpu_percent(interval=None)
 
     frame_count = 0
-
-    face_locations = []
-
-    face_encodings = []
-
-    face_results = []
-
-    emotion_results = {}
-
-    trackers = []
+    tracked_faces = []
+    last_entry_times = {}
 
     previous_time = time.time()
 
-    while not stop_event.is_set():
+    # Each tracked face stores its tracker, recognition,
+    # current bounding box and last emotion result.
 
-        # ------------------------------------------------
-        # Get newest frame
-        # ------------------------------------------------
+    try:
+        db.connect(reuse_if_open=True)
 
-        try:
+        while not stop_event.is_set():
 
-            frame = frame_queue.get(
-                timeout=0.1
+            try:
+                frame = frame_queue.get(timeout=0.1)
+            except Empty:
+                continue
+
+            frame_count += 1
+
+            cpu = process.cpu_percent(interval=None)
+
+            small_frame = cv2.resize(
+                frame,
+                None,
+                fx=SCALE,
+                fy=SCALE,
             )
 
-        except Empty:
+            # ==================================================
+            # Detection and Tracking
+            # ==================================================
 
-            continue
+            if frame_count % DETECTION_INTERVAL == 0:
 
+                # InsightFace returns both bounding boxes
+                # and 512D embeddings.
+                detected_faces = FACE_APP.get(small_frame)
 
-        frame_count += 1
+                tracked_faces = []
 
+                for detected in detected_faces:
 
-        # ------------------------------------------------
-        # CPU
-        # ------------------------------------------------
-
-        cpu = process.cpu_percent(
-            interval=None
-        )
-
-
-        # ==================================================
-        # Resize frame for AI processing
-        # ==================================================
-
-        small_frame = cv2.resize(
-            frame,
-            None,
-            fx=SCALE,
-            fy=SCALE
-        )
-
-
-        small_rgb = cv2.cvtColor(
-            small_frame,
-            cv2.COLOR_BGR2RGB
-        )
-
-
-        # ==================================================
-        # Face Detection + Tracker
-        # ==================================================
-
-        if frame_count % DETECTION_INTERVAL == 0:
-
-            # ----------------------------------------------
-            # Face Detection
-            # ----------------------------------------------
-
-            small_face_locations = (
-                face_recognition.face_locations(
-                    small_rgb
-                )
-            )
-
-
-            # ----------------------------------------------
-            # Convert coordinates
-            # small image → original frame
-            # ----------------------------------------------
-
-            face_locations = [
-
-                (
-                    int(top / SCALE),
-                    int(right / SCALE),
-                    int(bottom / SCALE),
-                    int(left / SCALE)
-                )
-
-                for top, right, bottom, left
-                in small_face_locations
-            ]
-
-
-            # ----------------------------------------------
-            # Create new trackers
-            # ----------------------------------------------
-
-            trackers = []
-
-
-            for top, right, bottom, left in face_locations:
-
-                width = right - left
-
-                height = bottom - top
-
-
-                if width <= 0 or height <= 0:
-
-                    continue
-
-
-                #tracker = cv2.TrackerKCF_create()
-                tracker = cv2.legacy.TrackerKCF_create()
-
-
-                tracker.init(
-                    frame,
-                    (
-                        left,
-                        top,
-                        width,
-                        height
-                    )
-                )
-
-
-                trackers.append(
-                    tracker
-                )
-
-
-        else:
-
-            # ----------------------------------------------
-            # Update trackers
-            # ----------------------------------------------
-
-            new_face_locations = []
-
-
-            for tracker in trackers:
-
-                success, box = tracker.update(
-                    frame
-                )
-
-
-                if success:
-
-                    x, y, w, h = [
-
-                        int(value)
-
-                        for value in box
-                    ]
-
-
-                    top = max(
-                        0,
-                        y
-                    )
+                    x1, y1, x2, y2 = detected.bbox
 
                     left = max(
-                        0,
-                        x
+                        0, int(x1 / SCALE)
                     )
+                    top = max(
+                        0, int(y1 / SCALE)
+                    )
+                    right = min(
+                        frame.shape[1],
+                        int(x2 / SCALE),
+                    )
+                    bottom = min(
+                        frame.shape[0],
+                        int(y2 / SCALE),
+                    )
+
+                    if right <= left or bottom <= top:
+                        continue
+
+                    # Recognition is evaluated at the configured
+                    # interval; detection already provides embeddings.
+                    if frame_count % RECOGNITION_INTERVAL == 0:
+                        result = recognize_face(detected.embedding)
+                    else:
+                        result = {
+                            "name": "Unknown",
+                            "distance": None,
+                            "person_id": None,
+                        }
+
+                    tracker = cv2.legacy.TrackerKCF_create()
+
+                    tracker.init(
+                        frame,
+                        (
+                            left,
+                            top,
+                            right - left,
+                            bottom - top,
+                        ),
+                    )
+
+                    tracked_faces.append({
+                        "tracker": tracker,
+                        "box": (top, right, bottom, left),
+                        "result": result,
+                        "emotion": "unknown",
+                        "emotion_score": 0.0,
+                    })
+
+            else:
+
+                # Update existing KCF trackers.
+                active_faces = []
+
+                for face_state in tracked_faces:
+
+                    success, box = face_state["tracker"].update(
+                        frame
+                    )
+
+                    if not success:
+                        continue
+
+                    x, y, w, h = [
+                        int(value) for value in box
+                    ]
+
+                    top = max(0, y)
+                    left = max(0, x)
 
                     bottom = min(
                         frame.shape[0],
-                        y + h
+                        y + h,
                     )
-
                     right = min(
                         frame.shape[1],
-                        x + w
+                        x + w,
                     )
 
+                    if right <= left or bottom <= top:
+                        continue
 
-                    if (
-                        right > left
-                        and bottom > top
-                    ):
-
-                        new_face_locations.append(
-                            (
-                                top,
-                                right,
-                                bottom,
-                                left
-                            )
-                        )
-
-
-            face_locations = (
-                new_face_locations
-            )
-
-
-        # ==================================================
-        # Face Recognition
-        # ==================================================
-
-        if (
-            frame_count % RECOGNITION_INTERVAL == 0
-            and len(face_locations) > 0
-        ):
-
-            # ----------------------------------------------
-            # Convert original coordinates
-            # → small image coordinates
-            # ----------------------------------------------
-
-            small_locations_for_encoding = [
-
-                (
-                    int(top * SCALE),
-                    int(right * SCALE),
-                    int(bottom * SCALE),
-                    int(left * SCALE)
-                )
-
-                for top, right, bottom, left
-                in face_locations
-            ]
-
-
-            # ----------------------------------------------
-            # Face Encoding
-            # ----------------------------------------------
-            print("A: Before face_encodings", flush=True)
-            face_encodings = (
-                face_recognition.face_encodings(
-                    small_rgb,
-                    small_locations_for_encoding
-                )
-            )
-
-            print("B: After face_encodings", flush=True)
-            for encoding in face_encodings:
-                print("Embedding shape:", encoding.shape)
-                print("Embedding dimensions:", len(encoding))
-
-
-            # ----------------------------------------------
-            # Recognition Results
-            # ----------------------------------------------
-
-            face_results = []
-
-
-            for encoding in face_encodings:
-
-                best_name = "Unknown"
-
-                best_distance = None
-
-                best_person_id = None
-
-                if len(known_embeddings) > 0:
-
-                    distances = (
-                        face_recognition.face_distance(
-                            known_embeddings,
-                            encoding
-                        )
+                    face_state["box"] = (
+                        top,
+                        right,
+                        bottom,
+                        left,
                     )
 
+                    active_faces.append(face_state)
 
-                    best_index = int(
-                        np.argmin(distances)
-                    )
+                tracked_faces = active_faces
 
+            # ==================================================
+            # Emotion Detection and Entry Logging
+            # ==================================================
 
-                    if (
-                        distances[best_index]
-                        <= TOLERANCE
-                    ):
+            for face_state in tracked_faces:
 
-                        best_name = (
-                            known_names[
-                                best_index
-                            ]
-                        )
+                result = face_state["result"]
+                best_name = result["name"]
 
-                        best_distance = float(
-                            distances[
-                                best_index
-                            ]
-                        )
+                if best_name == "Unknown":
+                    face_state["emotion"] = "unknown"
+                    face_state["emotion_score"] = 0.0
+                    continue
 
-                        best_person_id = known_person_ids[best_index]
-
-
-                face_results.append({
-
-                    "name": best_name,
-
-                    "distance": best_distance,
-
-                    "person_id": best_person_id
-                })
-
-
-        # ==================================================
-        # Process Each Face
-        # ==================================================
-
-        current_emotions = {}
-
-
-        for face_index, (
-
-            (top, right, bottom, left),
-
-            result
-
-        ) in enumerate(
-
-            zip(
-                face_locations,
-                face_results
-            )
-
-        ):
-
-            best_name = result["name"]
-
-            best_distance = result["distance"]
-
-
-            # ==============================================
-            # Emotion Detection
-            # ==============================================
-
-            emotion = "unknown"
-
-            emotion_score = 0.0
-
-
-            # Only check smile for known people
-            if best_name != "Unknown":
+                top, right, bottom, left = face_state["box"]
 
                 if frame_count % EMOTION_INTERVAL == 0:
 
-                    # Make sure coordinates are inside frame
-
-                    top_crop = max(
-                        0,
-                        top
-                    )
-
-                    bottom_crop = min(
-                        frame.shape[0],
-                        bottom
-                    )
-
-                    left_crop = max(
-                        0,
-                        left
-                    )
-
-                    right_crop = min(
-                        frame.shape[1],
-                        right
-                    )
-
-
-                    # Crop face
-
                     face_crop = frame[
-                        top_crop:bottom_crop,
-                        left_crop:right_crop
+                        max(0, top):min(frame.shape[0], bottom),
+                        max(0, left):min(frame.shape[1], right),
                     ]
-
 
                     if face_crop.size > 0:
 
-                        emotion, emotion_score = (
-                            detect_emotion(
-                                face_crop
-                            )
+                        emotion, emotion_score = detect_emotion(
+                            face_crop
                         )
 
-
-                        emotion_results[
-                            face_index
-                        ] = (
-                            emotion,
+                        face_state["emotion"] = emotion
+                        face_state["emotion_score"] = float(
                             emotion_score
                         )
 
+                emotion = face_state["emotion"]
 
-                else:
+                # Log recognized people only when smiling.
+                if emotion == "smile":
 
-                    # Use previous emotion result
+                    now = time.time()
 
-                    if face_index in emotion_results:
-
-                        emotion, emotion_score = (
-                            emotion_results[
-                                face_index
-                            ]
-                        )
-
-
-            current_emotions[
-                face_index
-            ] = (
-                emotion,
-                emotion_score
-            )
-
-
-            # ==================================================
-            # Entry Logging
-            # ==================================================
-
-            if best_name != "Unknown" and emotion == "smile":
-
-                now = time.time()
-
-                last_entry = last_entry_times.get(
-                    best_name,
-                    0
-                )
-
-                if now - last_entry >= ENTRY_COOLDOWN:
-
-                    current_datetime = datetime.now()
-
-                    EntryLog.create(
-
-                        person_id=result["person_id"],
-
-                        entry_date=current_datetime.date(),
-
-                        #entry_time=current_datetime.time()
-                        entry_time=current_datetime.replace(
-                            microsecond=0
-                        ).time()
+                    last_entry = last_entry_times.get(
+                        best_name, 0
                     )
 
-                    last_entry_times[best_name] = now
+                    if now - last_entry >= ENTRY_COOLDOWN:
 
-                    print(
-                        f"Entry logged: "
-                        f"{best_name} - "
-                        f"{current_datetime}"
-                    )
+                        current_datetime = datetime.now()
 
-        # ==================================================
-        # Prepare Result
-        # ==================================================
+                        try:
+                            with db.atomic():
+                                EntryLog.create(
+                                    person_id=result["person_id"],
+                                    entry_date=current_datetime.date(),
+                                    entry_time=current_datetime.replace(
+                                        microsecond=0
+                                    ).time(),
+                                )
 
-        result_data = []
+                            last_entry_times[best_name] = now
 
-        for face_index, (
+                            print(
+                                f"Entry logged: {best_name} - "
+                                f"{current_datetime}"
+                            )
 
-            (top, right, bottom, left),
+                        except Exception as error:
+                            print(f"Entry log error: {error}")
 
-            result
+            # ==================================================
+            # Prepare Results for Display
+            # ==================================================
 
-        ) in enumerate(
+            result_data = []
 
-            zip(
-                face_locations,
-                face_results
+            for face_state in tracked_faces:
+
+                result = face_state["result"]
+
+                result_data.append({
+                    "box": face_state["box"],
+                    "name": result["name"],
+                    "distance": result["distance"],
+                    "emotion": face_state["emotion"],
+                    "emotion_score": face_state["emotion_score"],
+                })
+
+            current_time = time.time()
+
+            fps = 1.0 / max(
+                current_time - previous_time,
+                0.001,
             )
 
-        ):
+            previous_time = current_time
 
-            emotion, emotion_score = (
-                current_emotions.get(
-                    face_index,
-                    ("unknown", 0.0)
-                )
+            output = (
+                frame,
+                result_data,
+                cpu,
+                fps,
             )
-
-
-            result_data.append({
-
-                "box": (
-                    top,
-                    right,
-                    bottom,
-                    left
-                ),
-
-                "name": result["name"],
-
-                "distance": result["distance"],
-
-                "emotion": emotion,
-
-                "emotion_score": emotion_score
-
-            })
-
-
-        # ==================================================
-        # FPS
-        # ==================================================
-
-        current_time = time.time()
-
-        fps = 1 / max(
-            current_time - previous_time,
-            0.001
-        )
-
-        previous_time = current_time
-
-
-        # ==================================================
-        # Send Result to Main Thread
-        # ==================================================
-
-        try:
 
             if result_queue.full():
+                try:
+                    result_queue.get_nowait()
+                except Empty:
+                    pass
 
-                result_queue.get_nowait()
+            try:
+                result_queue.put_nowait(output)
+            except:
+                pass
 
+    except Exception as error:
+        print(f"AI worker error: {error}")
 
-            result_queue.put_nowait(
-                (
-                    frame,
-                    result_data,
-                    cpu,
-                    fps
-                )
-            )
+    finally:
+        if not db.is_closed():
+            db.close()
 
-        except:
-
-            pass
-
-
-    # ==================================================
-    # Cleanup AI Thread
-    # ==================================================
-
-    close_emotion_detector()
-
-    print("AI thread stopped")
+        close_emotion_detector()
+        print("AI thread stopped")
 
 
 # ==================================================
-# Main
+# Main Display Loop
 # ==================================================
 
 def main():
 
     print("MAIN STARTED")
 
-
-    # ==================================================
-    # Create Threads
-    # ==================================================
-
     camera_thread = Thread(
-
         target=camera_reader,
-
-        daemon=True
+        daemon=True,
     )
-
 
     ai_thread = Thread(
-
         target=ai_worker,
-
-        daemon=True
+        daemon=True,
     )
 
-
-    # ==================================================
-    # Start Threads
-    # ==================================================
-
     camera_thread.start()
-
     ai_thread.start()
 
-
     print("Camera thread started")
-
     print("AI thread started")
 
-
-    # ==================================================
-    # Main Display Loop
-    # ==================================================
-
     try:
-
         while not stop_event.is_set():
 
             try:
-
-                frame, results, cpu, fps = (
-                    result_queue.get(
-                        timeout=0.1
-                    )
+                frame, results, cpu, fps = result_queue.get(
+                    timeout=0.1
                 )
-
             except Empty:
-
                 continue
-
-
-            # ==================================================
-            # Draw Results
-            # ==================================================
 
             for result in results:
 
-                top, right, bottom, left = (
-                    result["box"]
-                )
-
+                top, right, bottom, left = result["box"]
 
                 best_name = result["name"]
-
                 emotion = result["emotion"]
 
-
-                # ==============================================
-                # Access Message
-                # ==============================================
-
                 if best_name == "Unknown":
-
                     message = "Unknown"
-
-
-                elif emotion == "smile":
-
-                    message = (
-                        f"Hi {best_name} - Welcome!"
-                    )
-
-
-                else:
-
-                    message = (
-                        f"Hi {best_name} - Smile Please!"
-                    )
-
-
-                # ==============================================
-                # Box Color
-                # ==============================================
-
-                if best_name == "Unknown":
-
-                    # Red
-
-                    color = (
-                        0,
-                        0,
-                        255
-                    )
-
+                    color = (0, 0, 255)
 
                 elif emotion == "smile":
-
-                    # Green
-
-                    color = (
-                        0,
-                        255,
-                        0
-                    )
-
+                    message = f"Hi {best_name} - Welcome!"
+                    color = (0, 255, 0)
 
                 else:
-
-                    # Yellow
-
-                    color = (
-                        0,
-                        255,
-                        255
-                    )
-
-
-                # ==============================================
-                # Draw Face Box
-                # ==============================================
+                    message = f"Hi {best_name} - Smile Please!"
+                    color = (0, 255, 255)
 
                 cv2.rectangle(
-
                     frame,
-
-                    (
-                        left,
-                        top
-                    ),
-
-                    (
-                        right,
-                        bottom
-                    ),
-
+                    (left, top),
+                    (right, bottom),
                     color,
-
-                    2
+                    2,
                 )
-
-
-                # ==============================================
-                # Draw Message
-                # ==============================================
 
                 cv2.putText(
-
                     frame,
-
                     message,
-
-                    (
-                        left,
-                        max(
-                            30,
-                            top - 10
-                        )
-                    ),
-
+                    (left, max(30, top - 10)),
                     cv2.FONT_HERSHEY_SIMPLEX,
-
                     0.7,
-
                     color,
-
-                    2
+                    2,
                 )
 
-
-            # ==================================================
-            # CPU Display
-            # ==================================================
-
             cv2.putText(
-
                 frame,
-
                 f"CPU: {cpu:.1f}%",
-
-                (
-                    20,
-                    30
-                ),
-
+                (20, 30),
                 cv2.FONT_HERSHEY_SIMPLEX,
-
                 0.7,
-
-                (
-                    255,
-                    255,
-                    255
-                ),
-
-                2
+                (255, 255, 255),
+                2,
             )
-
-
-            # ==================================================
-            # FPS Display
-            # ==================================================
 
             cv2.putText(
-
                 frame,
-
                 f"FPS: {fps:.1f}",
-
-                (
-                    20,
-                    60
-                ),
-
+                (20, 60),
                 cv2.FONT_HERSHEY_SIMPLEX,
-
                 0.7,
-
-                (
-                    255,
-                    255,
-                    255
-                ),
-
-                2
+                (255, 255, 255),
+                2,
             )
 
-
-            # ==================================================
-            # Display
-            # ==================================================
-
-            cv2.imshow(
-
-                WINDOW_NAME,
-
-                frame
-            )
-
-
-            # ==================================================
-            # Keyboard
-            # ==================================================
+            cv2.imshow(WINDOW_NAME, frame)
 
             key = cv2.waitKey(1) & 0xFF
 
-
             if key == ord("q"):
-
                 print("Q pressed")
-
                 stop_event.set()
-
                 break
 
-
     finally:
-
-        # ==================================================
-        # Stop Threads
-        # ==================================================
-
         stop_event.set()
 
-
-        # Wait for Camera Thread
-
-        camera_thread.join(
-            timeout=2
-        )
-
-
-        # Wait for AI Thread
-
-        ai_thread.join(
-            timeout=2
-        )
-
+        camera_thread.join(timeout=2)
+        ai_thread.join(timeout=2)
 
         cv2.destroyAllWindows()
-
 
         print("Program stopped")
 
 
-# ==================================================
-# Run
-# ==================================================
-
 if __name__ == "__main__":
-
     main()
-
