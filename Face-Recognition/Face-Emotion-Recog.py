@@ -430,36 +430,81 @@ def ai_worker():
                         )
 
                 emotion = face_state["emotion"]
+               
 
-                # Log recognized people only when smiling.
+                # Log daily entry and update last-seen time.
                 if emotion == "smile":
 
                     now = time.time()
 
                     last_entry = last_entry_times.get(
-                        best_name, 0
+                        result["person_id"], 0
                     )
 
                     if now - last_entry >= ENTRY_COOLDOWN:
 
                         current_datetime = datetime.now()
+                        current_date = current_datetime.date()
+                        current_time = current_datetime.replace(
+                            microsecond=0
+                        ).time()
+
+                        person_id = result["person_id"]
 
                         try:
                             with db.atomic():
-                                EntryLog.create(
-                                    person_id=result["person_id"],
-                                    entry_date=current_datetime.date(),
-                                    entry_time=current_datetime.replace(
-                                        microsecond=0
-                                    ).time(),
+
+                                # Find the earliest daily record.
+                                daily_log = (
+                                    EntryLog
+                                    .select()
+                                    .where(
+                                        (EntryLog.person == person_id)
+                                        & (
+                                            EntryLog.entry_date
+                                            == current_date
+                                        )
+                                    )
+                                    .order_by(EntryLog.id.asc())
+                                    .first()
                                 )
 
-                            last_entry_times[best_name] = now
+                                if daily_log is None:
 
-                            print(
-                                f"Entry logged: {best_name} - "
-                                f"{current_datetime}"
-                            )
+                                    # First recognized entry today.
+                                    EntryLog.create(
+                                        person_id=person_id,
+                                        entry_date=current_date,
+                                        entry_time=current_time,
+                                        exit_time=current_time,
+                                    )
+
+                                    print(
+                                        f"First entry: {best_name} - "
+                                        f"{current_time}"
+                                    )
+
+                                else:
+
+                                    # Preserve the first entry time.
+                                    # Update only the last-seen time.
+                                    (
+                                        EntryLog
+                                        .update(
+                                            exit_time=current_time
+                                        )
+                                        .where(
+                                            EntryLog.id == daily_log.id
+                                        )
+                                        .execute()
+                                    )
+
+                                    print(
+                                        f"Last-seen time updated: "
+                                        f"{best_name} - {current_time}"
+                                    )
+
+                            last_entry_times[person_id] = now
 
                         except Exception as error:
                             print(f"Entry log error: {error}")

@@ -106,6 +106,7 @@ class EntryLog(BaseModel):
 
     entry_date = DateField()
     entry_time = TimeField()
+    exit_time = TimeField(null=True)
 
     class Meta:
         table_name = "entry_logs"
