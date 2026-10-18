@@ -1,0 +1,51 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>People | Smart Entry</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <aside class="sidebar">
+        <h2>Smart Entry</h2>
+        <a class="nav-link" href="/">Dashboard</a>
+        <a class="nav-link" href="/#attendance-logs">Attendance Logs</a>
+        <a class="nav-link active" href="/people">People</a>
+    </aside>
+
+    <main class="main">
+        <header>
+            <div>
+                <h1>People</h1><a class="back-link" href="/people/new">+ Add New Person</a>
+                <p>Registered people in Smart Entry</p>
+            </div>
+            <a class="back-link" href="/">Back to Dashboard</a>
+        </header>
+
+        <section class="people-grid">
+            {% for person in people %}
+            <a class="person-card" href="/people/{{ person.id }}">
+                <img
+                    class="person-avatar"
+                    src="{{ ('/' + person.profile_image.lstrip('/')) if person.profile_image else '/static/default-avatar.svg' }}"
+                    alt="Profile photo of {{ person.name }}"
+                    onerror="this.onerror=null; this.src='/static/default-avatar.svg';"
+                >
+                <div class="person-card-info">
+                    <h2>{{ person.name }}</h2>
+                    <p>View profile and attendance</p>
+                    <span class="profile-link">Open profile →</span>
+                </div>
+            </a>
+            {% else %}
+            <div class="empty-state">
+                <h2>No people registered</h2>
+                <p>Registered people will appear here.</p>
+            </div>
+            {% endfor %}
+        </section>
+    </main>
+</body>
+</html>

@@ -1,0 +1,77 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ person.name }} | Smart Entry</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <aside class="sidebar">
+        <h2>Smart Entry</h2>
+        <a class="nav-link" href="/">Dashboard</a>
+        <a class="nav-link" href="/people">People</a>
+    </aside>
+
+    <main class="main">
+        <header>
+            <div>
+                <h1>Person Profile</h1>
+                <p>Individual attendance records</p>
+            </div>
+            <a class="back-link" href="/people">← Back to People</a>
+        </header>
+
+        <section class="profile-panel">
+            <img
+                class="profile-avatar"
+                src="{{ ('/' + person.profile_image.lstrip('/')) if person.profile_image else '/static/default-avatar.svg' }}"
+                alt="Profile photo of {{ person.name }}"
+                onerror="this.onerror=null; this.src='/static/default-avatar.svg';"
+            >
+            <div>
+                <h2>{{ person.name }}</h2>
+                <p>Person ID: {{ person.id }}</p>
+                <p>Registered: {{ person.created_at }}</p>
+            </div>
+        </section>
+
+        <section class="cards profile-stats">
+            <div class="card">
+                <p>Total Attendance Records</p>
+                <h2>{{ total_entries }}</h2>
+            </div>
+        </section>
+
+        <section class="camera">
+            <h2>Attendance History</h2>
+
+            <div class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>Date</th>
+                            <th>Entry Time</th>
+                            <th>Exit Time</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for log in entry_logs %}
+                        <tr>
+                            <td>{{ log.entry_date }}</td>
+                            <td>{{ log.entry_time }}</td>
+                            <td>{{ log.exit_time if log.exit_time else "—" }}</td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="3">No attendance records found.</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+    </main>
+</body>
+</html>

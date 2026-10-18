@@ -1,0 +1,63 @@
+```html
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Add Person | Smart Entry</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <aside class="sidebar">
+        <h2>Smart Entry</h2>
+        <a class="nav-link" href="/">Dashboard</a>
+        <a class="nav-link active" href="/people">People</a>
+    </aside>
+
+    <main class="main">
+        <header>
+            <div>
+                <h1>Add New Person</h1>
+                <p>Register a person and optionally add a profile photo</p>
+            </div>
+            <a class="back-link" href="/people">← Back to People</a>
+        </header>
+
+        <section class="camera">
+            {% if error %}
+                <p style="color: #f87171;">{{ error }}</p>
+            {% endif %}
+
+            <form
+                action="/people/new"
+                method="post"
+                enctype="multipart/form-data"
+                class="person-form"
+            >
+                <label for="name">Full name</label>
+                <input
+                    id="name"
+                    name="name"
+                    type="text"
+                    maxlength="100"
+                    required
+                    placeholder="Enter person's name"
+                >
+
+                <label for="profile_photo">Profile photo (optional)</label>
+                <input
+                    id="profile_photo"
+                    name="profile_photo"
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp"
+                >
+
+                <p>Accepted formats: JPG, PNG, WEBP. Maximum size: 5 MB.</p>
+
+                <button type="submit">Save Person</button>
+            </form>
+        </section>
+    </main>
+</body>
+</html>
+```

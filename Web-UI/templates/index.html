@@ -1,0 +1,109 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Smart Entry Dashboard</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+    <aside class="sidebar">
+        <h2>Smart Entry</h2>
+        <p class="active">Dashboard</p>
+        <p>Attendance Logs</p>
+        <a class="nav-link" href="/people">People</a>
+        <p>Settings</p>
+    </aside>
+
+    <main class="main">
+        <header>
+            <div>
+                <h1>Dashboard</h1>
+                <p>AI-powered face recognition system</p>
+            </div>
+            <span class="status">● System Online</span>
+        </header>
+
+        <section class="cards">
+            <div class="card">
+                <p>Registered People</p>
+                <h2>{{ registered_people }}</h2>
+            </div>
+            <div class="card">
+                <p>Today's Entries</p>
+                <h2>{{ todays_entries }}</h2>
+                
+            </div>
+            <div class="card">
+                <p>Database Status</p>
+                <h2 class="green">{{ db_status }}</h2>
+            </div>
+        </section>
+        
+        <section class="camera" id="attendance-logs">
+            <h2>Entry & Exit Logs</h2>
+            
+            <input
+                type="text"
+                id="logSearch"
+                placeholder="Search by name..."
+                autocomplete="off"
+            />
+
+            
+            <input
+                type="date"
+                id="dateSearch"
+            />
+
+
+
+            <div style="overflow-x: auto;">
+                <table style="width: 100%; border-collapse: collapse; text-align: left;">
+                    <thead>
+                        <tr style="border-bottom: 1px solid #374151;">
+                            <th style="padding: 12px;">Name</th>
+                            <th style="padding: 12px;">Date</th>
+                            <th style="padding: 12px;">Entry Time</th>
+                            <th style="padding: 12px;">Exit Time</th>
+                        </tr>
+                    </thead>
+
+                    <tbody>
+                        {% for log in entry_logs %}
+                        <tr style="border-bottom: 1px solid #263244;">
+                            <td style="padding: 12px;">{{ log.name }}</td>
+                            <td style="padding: 12px;">{{ log.entry_date }}</td>
+                            <td style="padding: 12px;">{{ log.entry_time }}</td>
+                            <td style="padding: 12px;">
+                                {{ log.exit_time if log.exit_time else "—" }}
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="4" style="padding: 16px;">
+                                No entry records found.
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="camera">
+            <h2>Live Monitoring</h2>
+            <div class="camera-screen">
+                <div>
+                    <span class="camera-icon">◉</span>
+                    <p>Camera feed will appear here</p>
+                    <small>Live camera integration — coming next</small>
+                </div>
+            </div>
+        </section>
+
+    </main>
+    <script src="/static/app.js"></script>
+</body>
+</html>
