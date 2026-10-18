@@ -47,6 +47,7 @@ class Person(BaseModel):
     name = CharField(max_length=100, unique=True)
     
     created_at = DateTimeField(default=datetime.now)
+    profile_image = CharField(max_length=255, null=True)
 
     class Meta:
         table_name = "persons"
