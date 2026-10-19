@@ -432,82 +432,83 @@ def ai_worker():
                 emotion = face_state["emotion"]
                
 
-                # Log daily entry and update last-seen time.
+                
+                
+                # Log each recognized smiling entry.
                 if emotion == "smile":
-
                     now = time.time()
 
-                    last_entry = last_entry_times.get(
-                        result["person_id"], 0
-                    )
+                    person_id = result["person_id"]
+                    last_entry = last_entry_times.get(person_id, 0)
 
                     if now - last_entry >= ENTRY_COOLDOWN:
-
                         current_datetime = datetime.now()
                         current_date = current_datetime.date()
                         current_time = current_datetime.replace(
                             microsecond=0
                         ).time()
 
-                        person_id = result["person_id"]
-
                         try:
                             with db.atomic():
-
-                                # Find the earliest daily record.
-                                daily_log = (
+                                # Always find the earliest entry of today.
+                                first_daily_log = (
                                     EntryLog
                                     .select()
                                     .where(
                                         (EntryLog.person == person_id)
-                                        & (
-                                            EntryLog.entry_date
-                                            == current_date
-                                        )
+                                        & (EntryLog.entry_date == current_date)
                                     )
-                                    .order_by(EntryLog.id.asc())
+                                    .order_by(
+                                        EntryLog.entry_time.asc(),
+                                        EntryLog.id.asc(),
+                                    )
                                     .first()
                                 )
 
-                                if daily_log is None:
-
-                                    # First recognized entry today.
+                                if first_daily_log is None:
+                                    # First entry of the day.
                                     EntryLog.create(
                                         person_id=person_id,
                                         entry_date=current_date,
                                         entry_time=current_time,
-                                        exit_time=current_time,
+                                        exit_time=None,
                                     )
 
                                     print(
-                                        f"First entry: {best_name} - "
-                                        f"{current_time}"
+                                        f"First entry recorded: {best_name} "
+                                        f"- {current_time}",
+                                        flush=True,
                                     )
 
                                 else:
-
-                                    # Preserve the first entry time.
-                                    # Update only the last-seen time.
+                                    # Update exit time on the first entry only.
                                     (
                                         EntryLog
-                                        .update(
-                                            exit_time=current_time
-                                        )
+                                        .update(exit_time=current_time)
                                         .where(
-                                            EntryLog.id == daily_log.id
+                                            EntryLog.id == first_daily_log.id
                                         )
                                         .execute()
                                     )
 
+                                    # Preserve this additional entry separately.
+                                    EntryLog.create(
+                                        person_id=person_id,
+                                        entry_date=current_date,
+                                        entry_time=current_time,
+                                        exit_time=None,
+                                    )
+
                                     print(
-                                        f"Last-seen time updated: "
-                                        f"{best_name} - {current_time}"
+                                        f"Additional entry recorded: {best_name} "
+                                        f"- {current_time}",
+                                        flush=True,
                                     )
 
                             last_entry_times[person_id] = now
 
                         except Exception as error:
-                            print(f"Entry log error: {error}")
+                            print(f"Entry log error: {error}", flush=True)
 
             # ==================================================
             # Prepare Results for Display
