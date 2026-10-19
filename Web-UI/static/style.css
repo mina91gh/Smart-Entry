@@ -362,3 +362,13 @@ header p,
         flex-direction: column;
     }
 }
+
+
+/* Fixed-size profile images in dashboard table */
+.camera .profile-cell {
+    width: 66px;
+    padding: 10px 12px;
+    vertical-align: middle;
+}
+
+

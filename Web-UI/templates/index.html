@@ -63,6 +63,7 @@
                 <table style="width: 100%; border-collapse: collapse; text-align: left;">
                     <thead>
                         <tr style="border-bottom: 1px solid #374151;">
+                            <th style="padding: 12px;">Profile</th>
                             <th style="padding: 12px;">Name</th>
                             <th style="padding: 12px;">Date</th>
                             <th style="padding: 12px;">Entry Time</th>
@@ -73,17 +74,24 @@
                     <tbody>
                         {% for log in entry_logs %}
                         <tr style="border-bottom: 1px solid #263244;">
-                            <td style="padding: 12px;">{{ log.name }}</td>
-                            <td style="padding: 12px;">{{ log.entry_date }}</td>
-                            <td style="padding: 12px;">{{ log.entry_time }}</td>
-                            <td style="padding: 12px;">
-                                {{ log.exit_time if log.exit_time else "—" }}
+                            <td class="profile-cell">
+                                <img
+                                    src="{{ log.profile_image or '/static/default-avatar.svg' }}"
+                                    alt="{{ log.name }}"
+                                    class="person-avatar"
+                                    onerror="this.onerror=null; this.src='/static/default-avatar.svg';"
+                                >
                             </td>
+
+                            <td>{{ log.name }}</td>
+                            <td>{{ log.entry_date }}</td>
+                            <td>{{ log.entry_time }}</td>
+                            <td>{{ log.exit_time if log.exit_time else "—" }}</td>
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="4" style="padding: 16px;">
-                                No entry records found.
+                            <td colspan="5" style="padding: 16px;">
+                                No entry records found for today.
                             </td>
                         </tr>
                         {% endfor %}

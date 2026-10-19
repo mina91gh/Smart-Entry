@@ -32,11 +32,12 @@ app.mount(
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-
+'''
 def get_entry_logs(query):
     """Convert database logs to template-friendly dictionaries."""
     return [
-        {
+        { 
+            "profile_image": log.person.profile_image,    
             "name": log.person.name,
             "entry_date": log.entry_date,
             "entry_time": log.entry_time,
@@ -45,7 +46,22 @@ def get_entry_logs(query):
         for log in query
     ]
 
+'''
 
+def get_entry_logs(query):
+    logs = []
+
+    for log in query:
+        logs.append({
+            "person_id": log.person.id,
+            "profile_image": log.person.profile_image,
+            "name": log.person.name,
+            "entry_date": log.entry_date,
+            "entry_time": log.entry_time,
+            "exit_time": log.exit_time,
+        })
+
+    return logs
 @app.get("/")
 def dashboard(request: Request):
     registered_people = 0
@@ -66,16 +82,44 @@ def dashboard(request: Request):
             logs_query = (
                 EntryLog.select(EntryLog, Person)
                 .join(Person)
-                .order_by(
-                    EntryLog.entry_date.desc(),
-                    EntryLog.entry_time.desc(),
-                )
-                .limit(50)
+                .where(EntryLog.entry_date == date.today())
+                .order_by(EntryLog.entry_time.asc())
             )
 
-            entry_logs = get_entry_logs(logs_query)
-            db_status = "Connected"
+            all_logs = get_entry_logs(logs_query)
 
+            # Keep first entry and last exit for each person
+            daily_logs = {}
+
+            for log in all_logs:
+                person_id = log["person_id"]
+
+                if person_id not in daily_logs:
+                    daily_logs[person_id] = log.copy()
+                else:
+                    current_log = daily_logs[person_id]
+
+                    # Keep the earliest entry time
+                    current_log["entry_time"] = min(
+                        current_log["entry_time"],
+                        log["entry_time"],
+                    )
+
+                    # Keep the latest exit time
+                    if log["exit_time"] is not None:
+                        if (
+                            current_log["exit_time"] is None
+                            or log["exit_time"] > current_log["exit_time"]
+                        ):
+                            current_log["exit_time"] = log["exit_time"]
+
+            entry_logs = sorted(
+                daily_logs.values(),
+                key=lambda log: log["entry_time"],
+                reverse=True,
+            )
+
+            db_status = "Connected"
     except Exception as error:
         print(f"Dashboard database error: {error}")
 
@@ -229,6 +273,10 @@ async def create_person(
 
 @app.get("/people/{person_id}")
 def person_detail(request: Request, person_id: int):
+    print("HISTORY ROUTE REACHED!", flush=True)
+    print(">>> PERSON DETAIL ROUTE CALLED <<<", flush=True)
+    print(">>> PERSON ID:", person_id, flush=True)
+
     person = None
     entry_logs = []
 
@@ -248,6 +296,18 @@ def person_detail(request: Request, person_id: int):
 
                 entry_logs = get_entry_logs(logs_query)
 
+                print("Person:", person.name)
+                print("Today's date:", date.today())
+                print("History records:", len(entry_logs))
+
+                for log in entry_logs:
+                    print(
+                        log["entry_date"],
+                        log["entry_time"],
+                        log["exit_time"],
+                        flush=True,
+                    )
+
     except Exception as error:
         print(f"Person detail database error: {error}")
 
@@ -264,3 +324,4 @@ def person_detail(request: Request, person_id: int):
             "total_entries": len(entry_logs),
         },
     )
+
