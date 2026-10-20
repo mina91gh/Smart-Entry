@@ -40,7 +40,47 @@
                 <h2 class="green">{{ db_status }}</h2>
             </div>
         </section>
-        
+                
+        <section class="camera" id="live-monitoring">
+            <div class="section-heading">
+                <div>
+                    <h2>Live Monitoring</h2>
+                    <p class="section-description">Real-time camera feed</p>
+                </div>
+
+                <span id="cameraStatus" class="camera-status">
+                    Connecting...
+                </span>
+            </div>
+
+            <div class="camera-screen live-camera-screen">
+                <img
+                    id="cameraFeed"
+                    src="/video_feed"
+                    alt="Live camera feed"
+                    style="display: block; width: 100%; height: auto; min-height: 300px; object-fit: contain;"
+                    onload="
+                        this.style.display = 'block';
+                        document.getElementById('cameraStatus').textContent = 'Connected';
+                        document.getElementById('cameraStatus').classList.add('connected');
+                        document.getElementById('cameraOffline').hidden = true;
+                    "
+                    onerror="
+                        this.style.display = 'none';
+                        document.getElementById('cameraStatus').textContent = 'Disconnected';
+                        document.getElementById('cameraStatus').classList.remove('connected');
+                        document.getElementById('cameraOffline').hidden = false;
+                    "
+                >
+
+                <div id="cameraOffline" class="camera-offline" hidden>
+                    <span class="camera-icon">◉</span>
+                    <p>Camera feed is unavailable</p>
+                    <small>Check the camera connection and RTSP configuration.</small>
+                </div>
+            </div>
+        </section>
+
         <section class="camera" id="attendance-logs">
             <h2>Entry & Exit Logs</h2>
             
@@ -100,16 +140,7 @@
             </div>
         </section>
 
-        <section class="camera">
-            <h2>Live Monitoring</h2>
-            <div class="camera-screen">
-                <div>
-                    <span class="camera-icon">◉</span>
-                    <p>Camera feed will appear here</p>
-                    <small>Live camera integration — coming next</small>
-                </div>
-            </div>
-        </section>
+        
 
     </main>
     <script src="/static/app.js"></script>

@@ -102,6 +102,33 @@ header p,
     color: #9ca3af;
 }
 
+
+#live-monitoring .live-camera-screen {
+    width: 100%;
+    max-width: 800px;
+    min-height: 0;
+    height: 500px;
+    margin: 0 auto;
+    padding: 0;
+    overflow: hidden;
+    border-radius: 10px;
+}
+
+#live-monitoring #cameraFeed {
+    display: block;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    max-height: none;
+    object-fit: contain;
+    background: #080d18;
+}
+
+#live-monitoring .camera-offline {
+    text-align: center;
+    padding: 20px;
+}
+
 .camera-icon {
     font-size: 42px;
     color: #60a5fa;
@@ -372,3 +399,130 @@ header p,
 }
 
 
+/* Live Monitoring */
+
+.section-heading {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 18px;
+}
+
+.section-heading h2 {
+    margin: 0 0 6px;
+}
+
+.section-description {
+    margin: 0;
+    color: #9ca3af;
+    font-size: 13px;
+}
+
+.camera-status {
+    display: inline-flex;
+    align-items: center;
+    padding: 8px 12px;
+    border-radius: 8px;
+    background: #3b2a17;
+    color: #fbbf24;
+    font-size: 12px;
+    font-weight: 600;
+    white-space: nowrap;
+}
+
+.camera-status.connected {
+    background: #142b26;
+    color: #4ade80;
+}
+
+.live-camera-screen {
+    min-height: 0;
+    padding: 0;
+    overflow: hidden;
+    border-style: solid;
+    background: #080d18;
+}
+
+.camera-feed {
+    display: block;
+}
+
+.live-camera-screen img {
+    display: block;
+    width: 100%;
+    height: auto;
+    max-height: 650px;
+    object-fit: contain;
+}
+
+.camera-offline {
+    width: 100%;
+    min-height: 300px;
+    padding: 24px;
+    align-items: center;
+    justify-content: center;
+    flex-direction: column;
+    text-align: center;
+    color: #9ca3af;
+}
+
+.camera-offline[hidden] {
+    display: none;
+}
+
+.camera-offline p {
+    margin-bottom: 8px;
+}
+
+.camera-offline small {
+    color: #6b7280;
+    overflow-wrap: anywhere;
+}
+
+@media (max-width: 600px) {
+    .section-heading {
+        align-items: flex-start;
+        flex-direction: column;
+    }
+
+    .live-camera-screen img {
+        max-height: 360px;
+    }
+}
+
+
+.date-filter {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.date-filter label {
+    color: #d1d5db;
+    font-size: 14px;
+}
+
+.date-filter input {
+    padding: 10px 12px;
+    border: 1px solid #374151;
+    border-radius: 8px;
+    background: #111827;
+    color: #f9fafb;
+}
+
+.date-filter button {
+    padding: 10px 16px;
+    border: none;
+    border-radius: 8px;
+    background: #2563eb;
+    color: white;
+    cursor: pointer;
+}
+
+.date-filter a {
+    color: #93c5fd;
+    text-decoration: none;
+}

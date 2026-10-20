@@ -3,6 +3,11 @@ from datetime import date
 from pathlib import Path
 import sys
 
+import os
+import cv2
+
+from fastapi.responses import StreamingResponse
+
 from fastapi import FastAPI, Request
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
@@ -32,21 +37,66 @@ app.mount(
 
 templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
 
-'''
-def get_entry_logs(query):
-    """Convert database logs to template-friendly dictionaries."""
-    return [
-        { 
-            "profile_image": log.person.profile_image,    
-            "name": log.person.name,
-            "entry_date": log.entry_date,
-            "entry_time": log.entry_time,
-            "exit_time": log.exit_time,
-        }
-        for log in query
-    ]
+def generate_camera_frames(cap):
+    try:
+        while True:
+            success, frame = cap.read()
 
-'''
+            if not success:
+                break
+
+            encoded, buffer = cv2.imencode(
+                ".jpg",
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, 80],
+            )
+
+            if not encoded:
+                continue
+
+            yield (
+                b"--frame\r\n"
+                b"Content-Type: image/jpeg\r\n\r\n"
+                + buffer.tobytes()
+                + b"\r\n"
+            )
+
+    finally:
+        cap.release()
+
+
+@app.get("/video_feed")
+def video_feed():
+    camera_url = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
+
+    if not camera_url:
+        raise HTTPException(
+            status_code=503,
+            detail="Camera RTSP URL is not configured.",
+        )
+
+    cap = cv2.VideoCapture(
+        camera_url,
+        cv2.CAP_FFMPEG,
+    )
+
+    cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+    if not cap.isOpened():
+        cap.release()
+
+        raise HTTPException(
+            status_code=503,
+            detail="Could not connect to the camera.",
+        )
+
+    return StreamingResponse(
+        generate_camera_frames(cap),
+        media_type="multipart/x-mixed-replace; boundary=frame",
+    )
+
+
+
 
 def get_entry_logs(query):
     logs = []
@@ -62,6 +112,8 @@ def get_entry_logs(query):
         })
 
     return logs
+
+
 @app.get("/")
 def dashboard(request: Request):
     registered_people = 0
@@ -271,11 +323,17 @@ async def create_person(
             await profile_photo.close()
 
 
+
 @app.get("/people/{person_id}")
-def person_detail(request: Request, person_id: int):
+def person_detail(
+    request: Request,
+    person_id: int,
+    filter_date: date | None = None,
+):
     print("HISTORY ROUTE REACHED!", flush=True)
     print(">>> PERSON DETAIL ROUTE CALLED <<<", flush=True)
     print(">>> PERSON ID:", person_id, flush=True)
+    print(">>> FILTER DATE:", filter_date, flush=True)
 
     person = None
     entry_logs = []
@@ -285,20 +343,26 @@ def person_detail(request: Request, person_id: int):
             person = Person.get_or_none(Person.id == person_id)
 
             if person is not None:
-                logs_query = (
-                    EntryLog.select()
-                    .where(EntryLog.person == person)
-                    .order_by(
-                        EntryLog.entry_date.desc(),
-                        EntryLog.entry_time.desc(),
+                logs_query = EntryLog.select().where(
+                    EntryLog.person == person
+                )
+
+                # Filter records by the selected date.
+                if filter_date is not None:
+                    logs_query = logs_query.where(
+                        EntryLog.entry_date == filter_date
                     )
+
+                logs_query = logs_query.order_by(
+                    EntryLog.entry_date.desc(),
+                    EntryLog.entry_time.desc(),
                 )
 
                 entry_logs = get_entry_logs(logs_query)
 
-                print("Person:", person.name)
-                print("Today's date:", date.today())
-                print("History records:", len(entry_logs))
+                print("Person:", person.name, flush=True)
+                print("Today's date:", date.today(), flush=True)
+                print("History records:", len(entry_logs), flush=True)
 
                 for log in entry_logs:
                     print(
@@ -309,11 +373,14 @@ def person_detail(request: Request, person_id: int):
                     )
 
     except Exception as error:
-        print(f"Person detail database error: {error}")
+        print(f"Person detail database error: {error}", flush=True)
 
     if person is None:
         from fastapi import HTTPException
-        raise HTTPException(status_code=404, detail="Person not found")
+        raise HTTPException(
+            status_code=404,
+            detail="Person not found",
+        )
 
     return templates.TemplateResponse(
         request=request,
@@ -322,6 +389,8 @@ def person_detail(request: Request, person_id: int):
             "person": person,
             "entry_logs": entry_logs,
             "total_entries": len(entry_logs),
+            "filter_date": filter_date,
         },
     )
+
 
