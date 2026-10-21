@@ -1,63 +1,494 @@
-```html
+
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Add Person | Smart Entry</title>
-    <link rel="stylesheet" href="/static/style.css">
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Add Person | Smart Entry</title>
+  <link rel="stylesheet" href="/static/style.css">
+
+  <style>
+    .enroll-grid {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(260px, 1fr);
+      gap: 20px;
+    }
+
+    .network-camera {
+      width: 100%;
+      min-height: 240px;
+      background: #111827;
+      border-radius: 12px;
+      object-fit: contain;
+    }
+
+    .samples {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(90px, 1fr));
+      gap: 10px;
+      margin: 14px 0;
+    }
+
+    .samples img {
+      width: 100%;
+      aspect-ratio: 4/3;
+      object-fit: cover;
+      border-radius: 8px;
+    }
+
+    .status {
+      margin: 12px 0;
+      overflow-wrap: anywhere;
+    }
+
+    .actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 10px;
+      margin-top: 12px;
+    }
+
+    .profile-section {
+      margin: 20px 0;
+      padding: 16px;
+      border: 1px solid #d1d5db;
+      border-radius: 12px;
+    }
+
+    .profile-preview {
+      display: block;
+      width: 140px;
+      height: 140px;
+      margin: 12px 0;
+      object-fit: cover;
+      border-radius: 12px;
+      background: #e5e7eb;
+    }
+
+    .profile-help {
+      font-size: 13px;
+      opacity: 0.8;
+    }
+
+    button:disabled {
+      opacity: 0.5;
+      cursor: not-allowed;
+    }
+
+    @media (max-width: 800px) {
+      .enroll-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+  </style>
 </head>
+
 <body>
-    <aside class="sidebar">
-        <h2>Smart Entry</h2>
-        <a class="nav-link" href="/">Dashboard</a>
-        <a class="nav-link active" href="/people">People</a>
-    </aside>
+  <aside class="sidebar">
+    <h2>Smart Entry</h2>
+    <a class="nav-link" href="/">Dashboard</a>
+    <a class="nav-link active" href="/people">People</a>
+  </aside>
 
-    <main class="main">
-        <header>
-            <div>
-                <h1>Add New Person</h1>
-                <p>Register a person and optionally add a profile photo</p>
-            </div>
-            <a class="back-link" href="/people">← Back to People</a>
-        </header>
+  <main class="main">
+    <header>
+      <div>
+        <h1>Add New Person</h1>
+        <p>Capture face samples from the configured Axis/network camera.</p>
+      </div>
+      <a class="back-link" href="/people">← Back to People</a>
+    </header>
 
-        <section class="camera">
-            {% if error %}
-                <p style="color: #f87171;">{{ error }}</p>
-            {% endif %}
+    <section class="camera">
+      <div class="enroll-grid">
 
-            <form
-                action="/people/new"
-                method="post"
-                enctype="multipart/form-data"
-                class="person-form"
+        <!-- Network camera -->
+        <div>
+          <h3>Network camera preview</h3>
+
+          <img
+            id="networkCamera"
+            class="network-camera"
+            src="/video_feed"
+            alt="Network camera stream"
+          >
+
+          <p id="cameraStatus" class="status">
+            Connecting to the network camera…
+          </p>
+
+          <div class="actions">
+            <button id="captureButton" type="button" disabled>
+              Capture sample
+            </button>
+
+            <button id="clearButton" type="button">
+              Clear samples
+            </button>
+          </div>
+
+          <p>
+            Capture 5–20 samples. Ask the person to change their angle
+            slightly between samples. Keep only one face visible.
+          </p>
+        </div>
+
+        <!-- Registration form -->
+        <div>
+          <form id="personForm" class="person-form">
+
+            <label for="name">Full name</label>
+            <input
+              id="name"
+              name="name"
+              type="text"
+              maxlength="100"
+              required
+              placeholder="Enter person's name"
             >
-                <label for="name">Full name</label>
-                <input
-                    id="name"
-                    name="name"
-                    type="text"
-                    maxlength="100"
-                    required
-                    placeholder="Enter person's name"
-                >
 
-                <label for="profile_photo">Profile photo (optional)</label>
-                <input
-                    id="profile_photo"
-                    name="profile_photo"
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp"
-                >
+            <!-- Optional profile photo -->
+            <div class="profile-section">
+              <h3>Profile photo</h3>
 
-                <p>Accepted formats: JPG, PNG, WEBP. Maximum size: 5 MB.</p>
+              <p class="profile-help">
+                Choose an image from your computer.
+                If you skip this, the first valid camera sample
+                will be used as the profile photo.
+              </p>
 
-                <button type="submit">Save Person</button>
-            </form>
-        </section>
-    </main>
+              <label for="profileImage">Choose profile image</label>
+              <input
+                id="profileImage"
+                name="profileImage"
+                type="file"
+                accept="image/jpeg,image/png,image/webp"
+              >
+
+              <img
+                id="profilePreview"
+                class="profile-preview"
+                alt="Selected profile photo preview"
+                hidden
+              >
+
+              <button
+                id="removeProfileButton"
+                type="button"
+                hidden
+              >
+                Remove selected photo
+              </button>
+
+              <p id="profileStatus" class="status" role="status"></p>
+            </div>
+
+            <p>
+              Samples captured:
+              <strong id="sampleCount">0</strong> / 20
+              (minimum 5)
+            </p>
+
+            <div id="sampleGallery" class="samples"></div>
+
+            <button id="saveButton" type="submit" disabled>
+              Register person
+            </button>
+
+            <p id="result" class="status" role="status"></p>
+          </form>
+        </div>
+      </div>
+
+      <canvas id="captureCanvas" hidden></canvas>
+    </section>
+  </main>
+
+<script>
+(() => {
+  const camera = document.getElementById("networkCamera");
+  const canvas = document.getElementById("captureCanvas");
+
+  const captureButton = document.getElementById("captureButton");
+  const clearButton = document.getElementById("clearButton");
+  const saveButton = document.getElementById("saveButton");
+
+  const countLabel = document.getElementById("sampleCount");
+  const gallery = document.getElementById("sampleGallery");
+
+  const status = document.getElementById("cameraStatus");
+  const result = document.getElementById("result");
+
+  const form = document.getElementById("personForm");
+  const nameInput = document.getElementById("name");
+  const ctx = canvas.getContext("2d");
+
+  const profileInput = document.getElementById("profileImage");
+  const profilePreview = document.getElementById("profilePreview");
+  const profileStatus = document.getElementById("profileStatus");
+  const removeProfileButton =
+    document.getElementById("removeProfileButton");
+
+  let samples = [];
+  let cameraReady = false;
+  let submitting = false;
+
+  let profileImageData = null;
+  let profileFileName = "";
+  let readingProfile = false;
+
+  function updateUI() {
+    countLabel.textContent = String(samples.length);
+
+    captureButton.disabled =
+      !cameraReady || samples.length >= 20 || submitting;
+
+    clearButton.disabled =
+      samples.length === 0 || submitting;
+
+    profileInput.disabled = submitting || readingProfile;
+    removeProfileButton.disabled = submitting || readingProfile;
+
+    saveButton.disabled =
+      samples.length < 5 ||
+      !nameInput.value.trim() ||
+      submitting ||
+      readingProfile;
+
+    gallery.replaceChildren();
+
+    samples.forEach((sample, index) => {
+      const wrapper = document.createElement("div");
+      const img = document.createElement("img");
+      const label = document.createElement("small");
+
+      img.src = sample;
+      img.alt = `Captured sample ${index + 1}`;
+
+      label.textContent = `Sample ${index + 1}`;
+
+      wrapper.append(img, label);
+      gallery.append(wrapper);
+    });
+  }
+
+  camera.addEventListener("load", () => {
+    cameraReady = camera.naturalWidth > 0;
+
+    status.textContent = cameraReady
+      ? "Network camera connected. Capture samples when the face is clearly visible."
+      : "Camera stream is not available. Check the server logs.";
+
+    updateUI();
+  });
+
+  camera.addEventListener("error", () => {
+    cameraReady = false;
+
+    status.textContent =
+      "Could not load the network camera. Check the RTSP configuration.";
+
+    updateUI();
+  });
+
+  captureButton.addEventListener("click", () => {
+    if (!cameraReady || samples.length >= 20 || submitting) return;
+
+    const maxWidth = 1280;
+    const scale = Math.min(1, maxWidth / camera.naturalWidth);
+
+    canvas.width = Math.round(camera.naturalWidth * scale);
+    canvas.height = Math.round(camera.naturalHeight * scale);
+
+    ctx.drawImage(camera, 0, 0, canvas.width, canvas.height);
+
+    const frame = canvas.toDataURL("image/jpeg", 0.92);
+
+    samples.push(frame);
+
+    result.textContent = "";
+    updateUI();
+  });
+
+  clearButton.addEventListener("click", () => {
+    if (submitting) return;
+
+    samples = [];
+    result.textContent = "";
+
+    updateUI();
+  });
+
+  // Read and preview the profile photo selected from the computer.
+  profileInput.addEventListener("change", () => {
+    const file = profileInput.files[0];
+
+    profileImageData = null;
+    profileFileName = "";
+
+    profilePreview.removeAttribute("src");
+    profilePreview.hidden = true;
+    removeProfileButton.hidden = true;
+
+    if (!file) {
+      profileStatus.textContent = "";
+      updateUI();
+      return;
+    }
+
+    const allowedTypes = [
+      "image/jpeg",
+      "image/png",
+      "image/webp"
+    ];
+
+    if (!allowedTypes.includes(file.type)) {
+      profileInput.value = "";
+      profileStatus.textContent =
+        "Choose a JPEG, PNG, or WebP image.";
+
+      updateUI();
+      return;
+    }
+
+    if (file.size > 5 * 1024 * 1024) {
+      profileInput.value = "";
+      profileStatus.textContent =
+        "The profile image must be 5 MB or smaller.";
+
+      updateUI();
+      return;
+    }
+
+    readingProfile = true;
+    profileStatus.textContent = "Loading selected image…";
+    updateUI();
+
+    const reader = new FileReader();
+
+    reader.onload = () => {
+      const image = new Image();
+
+      image.onload = () => {
+        profileImageData = reader.result;
+        profileFileName = file.name;
+
+        profilePreview.src = profileImageData;
+        profilePreview.hidden = false;
+        removeProfileButton.hidden = false;
+
+        profileStatus.textContent =
+          `Selected: ${profileFileName}`;
+
+        readingProfile = false;
+        updateUI();
+      };
+
+      image.onerror = () => {
+        profileInput.value = "";
+        profileImageData = null;
+        profileFileName = "";
+
+        profileStatus.textContent =
+          "This image could not be opened. Choose another image.";
+
+        readingProfile = false;
+        updateUI();
+      };
+
+      image.src = reader.result;
+    };
+
+    reader.onerror = () => {
+      profileInput.value = "";
+      profileImageData = null;
+      profileFileName = "";
+
+      profileStatus.textContent =
+        "Could not read the selected image.";
+
+      readingProfile = false;
+      updateUI();
+    };
+
+    reader.readAsDataURL(file);
+  });
+
+  removeProfileButton.addEventListener("click", () => {
+    if (submitting || readingProfile) return;
+
+    profileInput.value = "";
+    profileImageData = null;
+    profileFileName = "";
+
+    profilePreview.removeAttribute("src");
+    profilePreview.hidden = true;
+    removeProfileButton.hidden = true;
+
+    profileStatus.textContent =
+      "No custom photo selected. The camera will provide the profile image.";
+
+    updateUI();
+  });
+
+  nameInput.addEventListener("input", updateUI);
+
+  form.addEventListener("submit", async (event) => {
+    event.preventDefault();
+
+    if (
+      submitting ||
+      readingProfile ||
+      samples.length < 5 ||
+      !nameInput.value.trim()
+    ) {
+      return;
+    }
+
+    submitting = true;
+    result.textContent =
+      "Processing camera samples and creating face embeddings…";
+
+    saveButton.textContent = "Registering…";
+    updateUI();
+
+    try {
+      const response = await fetch("/people/new", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          name: nameInput.value.trim(),
+          samples: samples,
+          profileImage: profileImageData
+        })
+      });
+
+      const data = await response.json().catch(() => ({}));
+
+      if (!response.ok) {
+        throw new Error(data.detail || "Registration failed.");
+      }
+
+      result.textContent =
+        data.message || "Person registered successfully.";
+
+      window.location.href = data.redirect || "/people";
+
+    } catch (error) {
+      result.textContent =
+        error.message || "Registration failed.";
+
+    } finally {
+      submitting = false;
+      saveButton.textContent = "Register person";
+      updateUI();
+    }
+  });
+
+  updateUI();
+})();
+</script>
 </body>
 </html>
-```

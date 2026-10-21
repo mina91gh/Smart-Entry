@@ -73,9 +73,10 @@ EMOTION_INTERVAL = 5
 SCALE = 0.5
 ENTRY_COOLDOWN = 30
 
-RTSP_URL = (
-    "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
-)
+RTSP_URL = os.getenv(
+    "SMART_ENTRY_RTSP_URL",
+    "rtsp://root:root@192.168.10.176:554/axis-media/media.amp",
+).strip()
 
 # CPU only until the cuDNN issue is resolved.
 FACE_APP = FaceAnalysis(
@@ -139,20 +140,70 @@ print(
 )
 
 
+# Reload embeddings periodically so people enrolled from the web panel become
+# recognizable without restarting this process.
+from threading import Lock
+gallery_lock = Lock()
+last_gallery_refresh = 0.0
+GALLERY_REFRESH_SECONDS = 5.0
+
+
+def refresh_known_gallery(force=False):
+    global known_embeddings, known_names, known_person_ids, last_gallery_refresh
+    now = time.monotonic()
+    if not force and now - last_gallery_refresh < GALLERY_REFRESH_SECONDS:
+        return
+    with gallery_lock:
+        now = time.monotonic()
+        if not force and now - last_gallery_refresh < GALLERY_REFRESH_SECONDS:
+            return
+        embeddings = []
+        names = []
+        person_ids = []
+        try:
+            with db.connection_context():
+                for item in FaceEmbedding512.select():
+                    vector = np.asarray(item.embedding, dtype=np.float32)
+                    if vector.shape != (512,):
+                        continue
+                    embeddings.append(vector)
+                    names.append(item.person.name)
+                    person_ids.append(item.person.id)
+        except Exception as error:
+            print(f"Gallery refresh failed; keeping previous gallery: {error}", flush=True)
+            return
+
+        new_embeddings = (
+            np.stack(embeddings).astype(np.float32)
+            if embeddings else np.empty((0, 512), dtype=np.float32)
+        )
+        known_embeddings = new_embeddings
+        known_names = names
+        known_person_ids = person_ids
+        last_gallery_refresh = now
+        print(f"Refreshed recognition gallery: {len(known_embeddings)} embeddings", flush=True)
+
+
 # ==================================================
 # Face Recognition using Cosine Similarity
 # ==================================================
 
 def recognize_face(embedding):
 
+    refresh_known_gallery()
+
     embedding = np.asarray(
         embedding,
         dtype=np.float32,
     )
 
+    gallery_embeddings = known_embeddings
+    gallery_names = known_names
+    gallery_person_ids = known_person_ids
+
     if (
         embedding.shape != (512,)
-        or len(known_embeddings) == 0
+        or len(gallery_embeddings) == 0
     ):
         return {
             "name": "Unknown",
@@ -173,12 +224,12 @@ def recognize_face(embedding):
     query = embedding / query_norm
 
     known_norms = np.linalg.norm(
-        known_embeddings,
+        gallery_embeddings,
         axis=1,
         keepdims=True,
     )
 
-    normalized_known = known_embeddings / np.maximum(
+    normalized_known = gallery_embeddings / np.maximum(
         known_norms,
         1e-12,
     )
@@ -196,9 +247,9 @@ def recognize_face(embedding):
         }
 
     return {
-        "name": known_names[best_index],
+        "name": gallery_names[best_index],
         "distance": 1.0 - best_similarity,
-        "person_id": known_person_ids[best_index],
+        "person_id": gallery_person_ids[best_index],
     }
 
 

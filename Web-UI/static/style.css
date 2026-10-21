@@ -526,3 +526,44 @@ header p,
     color: #93c5fd;
     text-decoration: none;
 }
+
+
+
+
+/* Fix: show profile photo upload controls */
+.people-grid .person-card-wrapper {
+    display: block !important;
+    width: 100%;
+    height: auto !important;
+    min-width: 0;
+    overflow: visible !important;
+}
+
+.people-grid .photo-upload-form {
+    display: flex !important;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px;
+    height: auto !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+    overflow: visible !important;
+}
+
+.people-grid .photo-upload-form label,
+.people-grid .photo-upload-form input,
+.people-grid .photo-upload-form button {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+.people-grid .photo-upload-form button {
+    width: 100%;
+    min-height: 42px;
+    cursor: pointer;
+}
+
+.people-grid .photo-upload-form input[type="file"] {
+    max-width: 100%;
+}

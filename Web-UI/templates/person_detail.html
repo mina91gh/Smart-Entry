@@ -43,9 +43,26 @@
                 <h2>{{ total_entries }}</h2>
             </div>
         </section>
-
+        
         <section class="camera">
             <h2>Attendance History</h2>
+
+            <!-- Date Filter -->
+            <form method="get" class="date-filter">
+                <label for="filter_date">Search history by date</label>
+
+                <input
+                    type="date"
+                    id="filter_date"
+                    name="filter_date"
+                    value="{{ filter_date.isoformat() if filter_date else '' }}"
+                    required
+                >
+
+                <button type="submit">Search</button>
+
+                <a href="/people/{{ person.id }}">Clear filter</a>
+            </form>
 
             <div class="table-wrapper">
                 <table>
@@ -72,6 +89,8 @@
                 </table>
             </div>
         </section>
+
+        
     </main>
 </body>
 </html>

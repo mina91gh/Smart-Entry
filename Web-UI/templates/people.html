@@ -6,7 +6,57 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>People | Smart Entry</title>
     <link rel="stylesheet" href="/static/style.css">
+
+    <style>
+        .person-card-wrapper {
+            min-width: 0;
+            overflow: hidden;
+            border-radius: 12px;
+        }
+
+        .person-card-wrapper .person-card {
+            display: block;
+            height: 100%;
+            text-decoration: none;
+        }
+
+        .person-card-wrapper .person-avatar {
+            display: block;
+        }
+
+        .photo-upload-form {
+            padding: 12px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .photo-upload-form input[type="file"] {
+            width: 100%;
+            max-width: 100%;
+            font-size: 13px;
+        }
+
+        .photo-upload-form button {
+            width: 100%;
+            cursor: pointer;
+        }
+
+        .photo-status {
+            margin: 0;
+            font-size: 13px;
+            overflow-wrap: anywhere;
+        }
+
+        .photo-preview {
+            width: 80px;
+            height: 80px;
+            border-radius: 10px;
+            object-fit: cover;
+        }
+    </style>
 </head>
+
 <body>
     <aside class="sidebar">
         <h2>Smart Entry</h2>
@@ -18,27 +68,64 @@
     <main class="main">
         <header>
             <div>
-                <h1>People</h1><a class="back-link" href="/people/new">+ Add New Person</a>
+                <h1>People</h1>
+                <a class="back-link" href="/people/new">+ Add New Person</a>
                 <p>Registered people in Smart Entry</p>
             </div>
+
             <a class="back-link" href="/">Back to Dashboard</a>
         </header>
 
         <section class="people-grid">
             {% for person in people %}
-            <a class="person-card" href="/people/{{ person.id }}">
-                <img
-                    class="person-avatar"
-                    src="{{ ('/' + person.profile_image.lstrip('/')) if person.profile_image else '/static/default-avatar.svg' }}"
-                    alt="Profile photo of {{ person.name }}"
-                    onerror="this.onerror=null; this.src='/static/default-avatar.svg';"
+            <div class="person-card-wrapper">
+
+                <a class="person-card" href="/people/{{ person.id }}">
+                    <img
+                        class="person-avatar"
+                        src="{{ ('/' + person.profile_image.lstrip('/')) if person.profile_image else '/static/default-avatar.svg' }}"
+                        alt="Profile photo of {{ person.name }}"
+                        onerror="this.onerror=null; this.src='/static/default-avatar.svg';"
+                    >
+
+                    <div class="person-card-info">
+                        <h2>{{ person.name }}</h2>
+                        <p>View profile and attendance</p>
+                        <span class="profile-link">Open profile →</span>
+                    </div>
+                </a>
+
+                <form
+                    class="photo-upload-form"
+                    data-person-name="{{ person.name }}"
+                    action="/people/{{ person.id }}/profile-image"
+                    method="post"
+                    enctype="multipart/form-data"
                 >
-                <div class="person-card-info">
-                    <h2>{{ person.name }}</h2>
-                    <p>View profile and attendance</p>
-                    <span class="profile-link">Open profile →</span>
-                </div>
-            </a>
+                    <label for="profile-image-{{ person.id }}">
+                        Change profile photo
+                    </label>
+
+                    <input
+                        id="profile-image-{{ person.id }}"
+                        name="profile_image"
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp"
+                        required
+                    >
+
+                    <img
+                        class="photo-preview"
+                        alt="New photo preview"
+                        hidden
+                    >
+
+                    <button type="submit">Upload photo</button>
+
+                    <p class="photo-status" role="status"></p>
+                </form>
+
+            </div>
             {% else %}
             <div class="empty-state">
                 <h2>No people registered</h2>
@@ -47,5 +134,83 @@
             {% endfor %}
         </section>
     </main>
+
+    <script>
+    document.querySelectorAll(".photo-upload-form").forEach((form) => {
+        const fileInput = form.querySelector('input[type="file"]');
+        const preview = form.querySelector(".photo-preview");
+        const status = form.querySelector(".photo-status");
+        const button = form.querySelector('button[type="submit"]');
+
+        fileInput.addEventListener("change", () => {
+            const file = fileInput.files[0];
+
+            preview.hidden = true;
+            preview.removeAttribute("src");
+            status.textContent = "";
+
+            if (!file) return;
+
+            const allowedTypes = [
+                "image/jpeg",
+                "image/png",
+                "image/webp"
+            ];
+
+            if (!allowedTypes.includes(file.type)) {
+                fileInput.value = "";
+                status.textContent = "Choose a JPEG, PNG, or WebP image.";
+                return;
+            }
+
+            if (file.size > 5 * 1024 * 1024) {
+                fileInput.value = "";
+                status.textContent = "Image must be 5 MB or smaller.";
+                return;
+            }
+
+            const reader = new FileReader();
+
+            reader.onload = () => {
+                preview.src = reader.result;
+                preview.hidden = false;
+            };
+
+            reader.onerror = () => {
+                fileInput.value = "";
+                status.textContent = "Could not read this image.";
+            };
+
+            reader.readAsDataURL(file);
+        });
+
+        form.addEventListener("submit", (event) => {
+            if (!fileInput.files.length) {
+                event.preventDefault();
+                status.textContent = "Choose an image first.";
+                return;
+            }
+
+            if (fileInput.files[0].size > 5 * 1024 * 1024) {
+                event.preventDefault();
+                status.textContent = "Image must be 5 MB or smaller.";
+                return;
+            }
+
+            const confirmed = window.confirm(
+                `Change the profile photo for ${form.dataset.personName}?`
+            );
+
+            if (!confirmed) {
+                event.preventDefault();
+                return;
+            }
+
+            button.disabled = true;
+            button.textContent = "Uploading…";
+            status.textContent = "Uploading profile photo…";
+        });
+    });
+    </script>
 </body>
 </html>
