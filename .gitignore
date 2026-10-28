@@ -9,3 +9,29 @@ backup/
 # Local Smart Entry configuration
 smart-entry.env
 smart-entry.*.env
+
+
+# PyInstaller build artifacts
+/build/
+/dist/
+
+# Local backup files
+*.backup
+
+# Local build logs
+build-log.txt
+
+# Local face profile exports
+insightface_profile_*.json
+# PyInstaller build artifacts
+/build/
+/dist/
+
+# Local backup files
+*.backup
+
+# Local build logs
+build-log.txt
+
+# Local face profile exports
+insightface_profile_*.json
