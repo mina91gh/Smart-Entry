@@ -14,14 +14,16 @@ from datetime import datetime
 from peewee import *
 from pgvector.peewee import VectorField
 
-
+import os
+import sys
+from pathlib import Path
 # =========================
 # Database
 # =========================
 
 # PostgreSQL database names are case-sensitive.
 # The database was created as lowercase "face-reco" (not "face-Recog").
-
+'''
 db = PostgresqlDatabase(
     "face-reco",
     user="postgres",
@@ -30,6 +32,74 @@ db = PostgresqlDatabase(
     port=5432,
 )
 
+'''
+
+# =========================
+# Database Configuration
+# =========================
+
+if getattr(sys, "frozen", False):
+    APP_ROOT = Path(sys.executable).resolve().parent
+else:
+    APP_ROOT = Path(__file__).resolve().parent.parent
+
+#CONFIG_FILE = APP_ROOT / "smart-entry.env"
+CONFIG_FILE = Path(
+    os.environ.get(
+        "SMART_ENTRY_CONFIG_FILE",
+        str(APP_ROOT / "smart-entry.env"),
+    )
+).expanduser()
+
+
+def load_env_file(file_path):
+    if not file_path.is_file():
+        return
+
+    with file_path.open("r", encoding="utf-8") as config:
+        for line in config:
+            line = line.strip()
+
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+
+            key, value = line.split("=", 1)
+            key = key.strip()
+            value = value.strip()
+
+            if key and key not in os.environ:
+                os.environ[key] = value
+
+
+load_env_file(CONFIG_FILE)
+
+required_settings = (
+    "SMART_ENTRY_DB_NAME",
+    "SMART_ENTRY_DB_USER",
+    "SMART_ENTRY_DB_PASSWORD",
+    "SMART_ENTRY_DB_HOST",
+    "SMART_ENTRY_DB_PORT",
+)
+
+missing_settings = [
+    key for key in required_settings
+    if not os.environ.get(key)
+]
+
+if missing_settings:
+    raise RuntimeError(
+        "Missing database settings: "
+        + ", ".join(missing_settings)
+        + ". Check smart-entry.env."
+    )
+
+db = PostgresqlDatabase(
+    os.environ["SMART_ENTRY_DB_NAME"],
+    user=os.environ["SMART_ENTRY_DB_USER"],
+    password=os.environ["SMART_ENTRY_DB_PASSWORD"],
+    host=os.environ["SMART_ENTRY_DB_HOST"],
+    port=int(os.environ["SMART_ENTRY_DB_PORT"]),
+)
 
 class BaseModel(Model):
 

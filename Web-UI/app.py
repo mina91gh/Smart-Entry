@@ -22,8 +22,22 @@ from fastapi import Form, File, UploadFile, HTTPException
 from fastapi.responses import RedirectResponse
 from peewee import IntegrityError
 
+'''
 # Locate the existing Face-Recognition folder
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+FACE_RECOGNITION_DIR = PROJECT_ROOT / "Face-Recognition"
+sys.path.insert(0, str(FACE_RECOGNITION_DIR))
+'''
+'''
+if getattr(sys, "frozen", False):
+    PROJECT_ROOT = Path(sys._MEIPASS)
+    BASE_DIR = PROJECT_ROOT / "Web-UI"
+else:
+    
+    BASE_DIR = Path(__file__).resolve().parent
+    PROJECT_ROOT = BASE_DIR.parent
+    
+
 FACE_RECOGNITION_DIR = PROJECT_ROOT / "Face-Recognition"
 sys.path.insert(0, str(FACE_RECOGNITION_DIR))
 
@@ -31,10 +45,10 @@ from model import db, Person, EntryLog, FaceEmbedding512
 
 app = FastAPI(title="Smart Entry")
 
-BASE_DIR = Path(__file__).resolve().parent
-SMART_ENTRY_RTSP_URL= (
-    "rtsp://root:root@192.168.10.176:554/axis-media/media.amp"
-)
+#BASE_DIR = Path(__file__).resolve().parent
+
+
+SMART_ENTRY_RTSP_URL = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
 app.mount(
     "/static",
     StaticFiles(directory=str(BASE_DIR / "static")),
@@ -47,6 +61,56 @@ print("BASE_DIR:", BASE_DIR.resolve())
 print("TEMPLATE DIR:", (BASE_DIR / "templates").resolve())
 print("PEOPLE TEMPLATE:", (BASE_DIR / "templates" / "people.html").resolve())
 print("TEMPLATE EXISTS:", (BASE_DIR / "templates" / "people.html").exists())
+'''
+
+if getattr(sys, "frozen", False):
+    # Bundled, read-only application resources
+    PROJECT_ROOT = Path(sys._MEIPASS)
+    BASE_DIR = PROJECT_ROOT / "Web-UI"
+
+    # Persistent data directory beside SmartEntry.exe
+    DATA_ROOT = Path(sys.executable).resolve().parent
+else:
+    BASE_DIR = Path(__file__).resolve().parent
+    PROJECT_ROOT = BASE_DIR.parent
+    DATA_ROOT = PROJECT_ROOT
+
+FACE_RECOGNITION_DIR = PROJECT_ROOT / "Face-Recognition"
+sys.path.insert(0, str(FACE_RECOGNITION_DIR))
+
+from model import db, Person, EntryLog, FaceEmbedding512
+
+app = FastAPI(title="Smart Entry")
+
+SMART_ENTRY_RTSP_URL = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
+
+
+
+# Persistent profile image directory
+PROFILE_IMAGES_DIR = DATA_ROOT / "Web-UI" / "static" / "uploads" / "people"
+PROFILE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+# Serve persistent profile images at the existing URL
+app.mount(
+    "/static/uploads/people",
+    StaticFiles(directory=str(PROFILE_IMAGES_DIR)),
+    name="profile-images",
+)
+
+# Keep bundled static resources available
+app.mount(
+    "/static",
+    StaticFiles(directory=str(BASE_DIR / "static")),
+    name="static",
+)
+
+templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+
+print("BASE_DIR:", BASE_DIR.resolve())
+print("TEMPLATE DIR:", (BASE_DIR / "templates").resolve())
+print("PROFILE IMAGES DIR:", PROFILE_IMAGES_DIR.resolve())
+
+
 def generate_camera_frames(cap):
     try:
         while True:
@@ -77,7 +141,7 @@ def generate_camera_frames(cap):
 
 @app.get("/video_feed")
 def video_feed():
-    #camera_url = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
+    
     camera_url = SMART_ENTRY_RTSP_URL.strip()
 
     if not camera_url:
@@ -385,6 +449,195 @@ async def update_person_profile_image(
 
     finally:
         await profile_image.close()
+
+
+
+@app.post("/people/{person_id}/edit")
+async def edit_person_profile(
+    person_id: int,
+    name: str = Form(...),
+    profile_image: UploadFile | None = File(None),
+):
+    new_profile_path = None
+    profile_dir = BASE_DIR / "static" / "uploads" / "people"
+
+    try:
+        # Validate the submitted name.
+        person_name = name.strip()
+
+        if not person_name:
+            raise HTTPException(
+                status_code=400,
+                detail="Please enter a person's name.",
+            )
+
+        if len(person_name) > 100:
+            raise HTTPException(
+                status_code=400,
+                detail="Name must be 100 characters or fewer.",
+            )
+
+        with db.connection_context():
+            person = Person.get_or_none(Person.id == person_id)
+
+            if person is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail="Person not found.",
+                )
+
+            # Prevent duplicate names belonging to other people.
+            duplicate = Person.get_or_none(
+                (Person.name == person_name)
+                & (Person.id != person_id)
+            )
+
+            if duplicate is not None:
+                raise HTTPException(
+                    status_code=409,
+                    detail="Another person already has this name.",
+                )
+
+            old_profile_url = person.profile_image
+
+        # Prepare the update. Keep the current photo unless
+        # the user has selected a replacement.
+        update_fields = [Person.name]
+        person.name = person_name
+
+        if profile_image is not None and profile_image.filename:
+            allowed_types = {
+                "image/jpeg",
+                "image/png",
+                "image/webp",
+            }
+
+            if profile_image.content_type not in allowed_types:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Choose a JPEG, PNG, or WebP image.",
+                )
+
+            raw = await profile_image.read(5 * 1024 * 1024 + 1)
+
+            if not raw:
+                raise HTTPException(
+                    status_code=400,
+                    detail="The uploaded image is empty.",
+                )
+
+            if len(raw) > 5 * 1024 * 1024:
+                raise HTTPException(
+                    status_code=413,
+                    detail="The image must be 5 MB or smaller.",
+                )
+
+            image = cv2.imdecode(
+                np.frombuffer(raw, dtype=np.uint8),
+                cv2.IMREAD_COLOR,
+            )
+
+            if image is None:
+                raise HTTPException(
+                    status_code=400,
+                    detail="The uploaded file is not a valid image.",
+                )
+
+            success, encoded = cv2.imencode(
+                ".jpg",
+                image,
+                [cv2.IMWRITE_JPEG_QUALITY, 90],
+            )
+
+            if not success:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Could not process the uploaded image.",
+                )
+
+            profile_dir.mkdir(parents=True, exist_ok=True)
+
+            new_filename = f"{uuid.uuid4().hex}.jpg"
+            new_profile_path = profile_dir / new_filename
+
+            new_profile_path.write_bytes(encoded.tobytes())
+
+            person.profile_image = (
+                f"/static/uploads/people/{new_filename}"
+            )
+            update_fields.append(Person.profile_image)
+
+        # Save the name and optional photo update together.
+        try:
+            with db.connection_context():
+                with db.atomic():
+                    person.save(only=update_fields)
+
+        except Exception:
+            if new_profile_path is not None:
+                new_profile_path.unlink(missing_ok=True)
+                new_profile_path = None
+            raise
+
+        # Delete the old photo only after the database update succeeds.
+        if new_profile_path is not None and old_profile_url:
+            old_prefix = "/static/uploads/people/"
+
+            if old_profile_url.startswith(old_prefix):
+                old_filename = old_profile_url[len(old_prefix):]
+
+                if (
+                    old_filename
+                    and Path(old_filename).name == old_filename
+                    and old_filename != new_profile_path.name
+                ):
+                    try:
+                        (profile_dir / old_filename).unlink(
+                            missing_ok=True
+                        )
+                    except OSError as error:
+                        print(
+                            f"Could not delete old profile photo: {error}",
+                            flush=True,
+                        )
+
+        return RedirectResponse(
+            url=f"/people/{person_id}",
+            status_code=303,
+        )
+
+    except IntegrityError:
+        if new_profile_path is not None:
+            new_profile_path.unlink(missing_ok=True)
+
+        raise HTTPException(
+            status_code=409,
+            detail="Another person already has this name.",
+        )
+
+    except HTTPException:
+        if new_profile_path is not None:
+            new_profile_path.unlink(missing_ok=True)
+        raise
+
+    except Exception as error:
+        if new_profile_path is not None:
+            try:
+                new_profile_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+        print(f"Person profile update error: {error}", flush=True)
+
+        raise HTTPException(
+            status_code=500,
+            detail="Profile update failed. Check the server terminal.",
+        )
+
+    finally:
+        if profile_image is not None:
+            await profile_image.close()
+
 
 
 @app.get("/people/new")

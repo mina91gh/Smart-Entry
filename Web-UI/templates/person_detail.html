@@ -30,11 +30,60 @@
                 alt="Profile photo of {{ person.name }}"
                 onerror="this.onerror=null; this.src='/static/default-avatar.svg';"
             >
+
             <div>
                 <h2>{{ person.name }}</h2>
                 <p>Person ID: {{ person.id }}</p>
                 <p>Registered: {{ person.created_at }}</p>
+
+                <button
+                    type="button"
+                    onclick="document.getElementById('edit-profile-form').hidden = false; this.hidden = true;"
+                >
+                    Edit Profile
+                </button>
             </div>
+        </section>
+
+        <section class="camera" id="edit-profile-section">
+            <form
+                id="edit-profile-form"
+                method="post"
+                action="/people/{{ person.id }}/edit"
+                enctype="multipart/form-data"
+                hidden
+            >
+                <h2>Edit Profile</h2>
+
+                <label for="name">Name</label>
+                <input
+                    type="text"
+                    id="name"
+                    name="name"
+                    value="{{ person.name }}"
+                    maxlength="255"
+                    required
+                >
+
+                <label for="profile_image">Profile Photo</label>
+                <input
+                    type="file"
+                    id="profile_image"
+                    name="profile_image"
+                    accept="image/*"
+                >
+
+                <p>Leave the photo field empty to keep the current photo.</p>
+
+                <button type="submit">Save Changes</button>
+
+                <button
+                    type="button"
+                    onclick="document.getElementById('edit-profile-form').hidden = true; document.querySelector('.profile-panel button').hidden = false;"
+                >
+                    Cancel
+                </button>
+            </form>
         </section>
 
         <section class="cards profile-stats">
@@ -43,11 +92,10 @@
                 <h2>{{ total_entries }}</h2>
             </div>
         </section>
-        
+
         <section class="camera">
             <h2>Attendance History</h2>
 
-            <!-- Date Filter -->
             <form method="get" class="date-filter">
                 <label for="filter_date">Search history by date</label>
 
@@ -89,8 +137,6 @@
                 </table>
             </div>
         </section>
-
-        
     </main>
 </body>
 </html>

@@ -4,3 +4,8 @@ __pycache__/
 *.pyc
 .env
 Face-Collection/dataset/
+Web-UI/static/uploads/people/
+backup/
+# Local Smart Entry configuration
+smart-entry.env
+smart-entry.*.env

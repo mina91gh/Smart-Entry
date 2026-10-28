@@ -3,6 +3,7 @@ import time
 import cv2
 import numpy as np
 import psutil
+import traceback
 
 from threading import Thread, Event
 from queue import Queue, Empty
@@ -72,16 +73,26 @@ EMOTION_INTERVAL = 5
 
 SCALE = 0.5
 ENTRY_COOLDOWN = 30
-
+'''
 RTSP_URL = os.getenv(
     "SMART_ENTRY_RTSP_URL",
     "rtsp://root:root@192.168.10.176:554/axis-media/media.amp",
 ).strip()
+'''
+
+RTSP_URL = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
+
+if not RTSP_URL:
+    raise RuntimeError(
+        "SMART_ENTRY_RTSP_URL is missing. "
+        "Configure the camera URL in smart-entry.env."
+    )
 
 # CPU only until the cuDNN issue is resolved.
 FACE_APP = FaceAnalysis(
     name="buffalo_l",
-    providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    #providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
+    providers=["CPUExecutionProvider"]
 )
 
 FACE_APP.prepare(
@@ -326,6 +337,10 @@ def ai_worker():
             except Empty:
                 continue
 
+            if frame is None or not isinstance(frame, np.ndarray) or frame.size == 0:
+                print("AI worker: Invalid frame received; skipping.")
+                continue
+            
             frame_count += 1
 
             cpu = process.cpu_percent(interval=None)
@@ -607,7 +622,8 @@ def ai_worker():
                 pass
 
     except Exception as error:
-        print(f"AI worker error: {error}")
+        print(f"AI worker error: {error}", flush=True)
+        traceback.print_exc()
 
     finally:
         if not db.is_closed():
