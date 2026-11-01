@@ -35,3 +35,15 @@ build-log.txt
 
 # Local face profile exports
 insightface_profile_*.json
+
+# Local client configuration (server URL)
+client.env
+
+# Pre-installer backup files
+*_backup_before_installer.py
+
+# Installer build output
+installer-output/
+
+# InsightFace model payload for installer
+installer-payload/

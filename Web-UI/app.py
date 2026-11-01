@@ -1,115 +1,149 @@
 
 from datetime import date
 from pathlib import Path
-import sys
+from threading import Lock
 
 import os
+import sys
 import cv2
-
-from fastapi.responses import StreamingResponse
-
-from fastapi import FastAPI, Request
-from fastapi.staticfiles import StaticFiles
-from fastapi.templating import Jinja2Templates
-
 import uuid
 import base64
 import re
 import numpy as np
-from threading import Lock
 
-from fastapi import Form, File, UploadFile, HTTPException
-from fastapi.responses import RedirectResponse
-from peewee import IntegrityError
-
-'''
-# Locate the existing Face-Recognition folder
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-FACE_RECOGNITION_DIR = PROJECT_ROOT / "Face-Recognition"
-sys.path.insert(0, str(FACE_RECOGNITION_DIR))
-'''
-'''
-if getattr(sys, "frozen", False):
-    PROJECT_ROOT = Path(sys._MEIPASS)
-    BASE_DIR = PROJECT_ROOT / "Web-UI"
-else:
-    
-    BASE_DIR = Path(__file__).resolve().parent
-    PROJECT_ROOT = BASE_DIR.parent
-    
-
-FACE_RECOGNITION_DIR = PROJECT_ROOT / "Face-Recognition"
-sys.path.insert(0, str(FACE_RECOGNITION_DIR))
-
-from model import db, Person, EntryLog, FaceEmbedding512
-
-app = FastAPI(title="Smart Entry")
-
-#BASE_DIR = Path(__file__).resolve().parent
-
-
-SMART_ENTRY_RTSP_URL = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
-app.mount(
-    "/static",
-    StaticFiles(directory=str(BASE_DIR / "static")),
-    name="static",
+from fastapi import (
+    FastAPI,
+    Request,
+    Form,
+    File,
+    UploadFile,
+    HTTPException,
 )
 
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+from fastapi.responses import (
+    StreamingResponse,
+    RedirectResponse,
+)
 
-print("BASE_DIR:", BASE_DIR.resolve())
-print("TEMPLATE DIR:", (BASE_DIR / "templates").resolve())
-print("PEOPLE TEMPLATE:", (BASE_DIR / "templates" / "people.html").resolve())
-print("TEMPLATE EXISTS:", (BASE_DIR / "templates" / "people.html").exists())
-'''
+from fastapi.staticfiles import StaticFiles
+from fastapi.templating import Jinja2Templates
+
+from peewee import IntegrityError
+
+
+# ============================================================
+# APPLICATION PATHS
+# ============================================================
 
 if getattr(sys, "frozen", False):
-    # Bundled, read-only application resources
+    # Running as a packaged EXE
     PROJECT_ROOT = Path(sys._MEIPASS)
     BASE_DIR = PROJECT_ROOT / "Web-UI"
 
-    # Persistent data directory beside SmartEntry.exe
-    DATA_ROOT = Path(sys.executable).resolve().parent
+    # Persistent data directory for installed application
+    DATA_ROOT = (
+        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+        / "SmartEntry"
+    )
+
 else:
+    # Running in development mode
     BASE_DIR = Path(__file__).resolve().parent
     PROJECT_ROOT = BASE_DIR.parent
+
+    # Preserve existing development data
     DATA_ROOT = PROJECT_ROOT
+
+
+# ============================================================
+# PERSISTENT DATA DIRECTORIES
+# ============================================================
+
+PROFILE_IMAGES_DIR = (
+    DATA_ROOT
+    / "Web-UI"
+    / "static"
+    / "uploads"
+    / "people"
+)
+
+DATASET_DIR = (
+    DATA_ROOT
+    / "Face-Collection"
+    / "dataset"
+)
+
+LOGS_DIR = DATA_ROOT / "Logs"
+
+
+# Create required directories
+PROFILE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+DATASET_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# ============================================================
+# FACE RECOGNITION MODULE
+# ============================================================
 
 FACE_RECOGNITION_DIR = PROJECT_ROOT / "Face-Recognition"
 sys.path.insert(0, str(FACE_RECOGNITION_DIR))
 
 from model import db, Person, EntryLog, FaceEmbedding512
 
+
+# ============================================================
+# FASTAPI APPLICATION
+# ============================================================
+
 app = FastAPI(title="Smart Entry")
 
-SMART_ENTRY_RTSP_URL = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
+SMART_ENTRY_RTSP_URL = os.getenv(
+    "SMART_ENTRY_RTSP_URL",
+    "",
+).strip()
 
 
+# ============================================================
+# STATIC FILES AND TEMPLATES
+# ============================================================
 
-# Persistent profile image directory
-PROFILE_IMAGES_DIR = DATA_ROOT / "Web-UI" / "static" / "uploads" / "people"
-PROFILE_IMAGES_DIR.mkdir(parents=True, exist_ok=True)
-
-# Serve persistent profile images at the existing URL
+# Serve persistent profile images
 app.mount(
     "/static/uploads/people",
     StaticFiles(directory=str(PROFILE_IMAGES_DIR)),
     name="profile-images",
 )
 
-# Keep bundled static resources available
+# Serve bundled static resources
 app.mount(
     "/static",
     StaticFiles(directory=str(BASE_DIR / "static")),
     name="static",
 )
 
-templates = Jinja2Templates(directory=str(BASE_DIR / "templates"))
+templates = Jinja2Templates(
+    directory=str(BASE_DIR / "templates")
+)
 
+
+# ============================================================
+# STARTUP INFORMATION
+# ============================================================
+
+print("PROJECT_ROOT:", PROJECT_ROOT.resolve())
 print("BASE_DIR:", BASE_DIR.resolve())
+print("DATA_ROOT:", DATA_ROOT.resolve())
+print("PROFILE_IMAGES_DIR:", PROFILE_IMAGES_DIR.resolve())
+print("DATASET_DIR:", DATASET_DIR.resolve())
+print("LOGS_DIR:", LOGS_DIR.resolve())
 print("TEMPLATE DIR:", (BASE_DIR / "templates").resolve())
-print("PROFILE IMAGES DIR:", PROFILE_IMAGES_DIR.resolve())
+print("RTSP CONFIGURED:", bool(SMART_ENTRY_RTSP_URL))
 
+
+# ============================================================
+# CAMERA STREAM
+# ============================================================
 
 def generate_camera_frames(cap):
     try:
@@ -141,17 +175,19 @@ def generate_camera_frames(cap):
 
 @app.get("/video_feed")
 def video_feed():
-    
+
     camera_url = SMART_ENTRY_RTSP_URL.strip()
 
     if not camera_url:
         print("ERROR: SMART_ENTRY_RTSP_URL is empty!")
+
         raise HTTPException(
             status_code=503,
             detail="Camera RTSP URL is not configured.",
         )
 
     print("RTSP URL is configured.")
+
     cap = cv2.VideoCapture(
         camera_url,
         cv2.CAP_FFMPEG,
@@ -161,22 +197,28 @@ def video_feed():
 
     if not cap.isOpened():
         print("ERROR: Could not connect to the camera!")
+
         cap.release()
 
         raise HTTPException(
             status_code=503,
             detail="Could not connect to the camera.",
         )
+
     print("Camera connected successfully!")
+
     return StreamingResponse(
         generate_camera_frames(cap),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 
 
-
+# ============================================================
+# ATTENDANCE LOG HELPER
+# ============================================================
 
 def get_entry_logs(query):
+
     logs = []
 
     for log in query:
@@ -192,8 +234,13 @@ def get_entry_logs(query):
     return logs
 
 
+# ============================================================
+# DASHBOARD
+# ============================================================
+
 @app.get("/")
 def dashboard(request: Request):
+
     registered_people = 0
     todays_entries = 0
     db_status = "Disconnected"
@@ -201,6 +248,7 @@ def dashboard(request: Request):
 
     try:
         with db.connection_context():
+
             registered_people = Person.select().count()
 
             todays_entries = (
@@ -218,25 +266,28 @@ def dashboard(request: Request):
 
             all_logs = get_entry_logs(logs_query)
 
-            # Keep first entry and last exit for each person
+            # Keep first entry and latest exit for each person
             daily_logs = {}
 
             for log in all_logs:
+
                 person_id = log["person_id"]
 
                 if person_id not in daily_logs:
                     daily_logs[person_id] = log.copy()
+
                 else:
                     current_log = daily_logs[person_id]
 
-                    # Keep the earliest entry time
+                    # Keep earliest entry time
                     current_log["entry_time"] = min(
                         current_log["entry_time"],
                         log["entry_time"],
                     )
 
-                    # Keep the latest exit time
+                    # Keep latest exit time
                     if log["exit_time"] is not None:
+
                         if (
                             current_log["exit_time"] is None
                             or log["exit_time"] > current_log["exit_time"]
@@ -250,6 +301,7 @@ def dashboard(request: Request):
             )
 
             db_status = "Connected"
+
     except Exception as error:
         print(f"Dashboard database error: {error}")
 
@@ -264,53 +316,60 @@ def dashboard(request: Request):
         },
     )
 
-'''
+
+# ============================================================
+# PEOPLE PAGE
+# ============================================================
+
 @app.get("/people")
 def people_page(request: Request):
+
     people = []
 
     try:
         with db.connection_context():
+
             people = list(
                 Person.select().order_by(Person.name)
             )
-    except Exception as error:
-        print(f"People page database error: {error}")
 
-    return templates.TemplateResponse(
-        request=request,
-        name="people.html",
-        context={"people": people},
-    )
-
-'''
-@app.get("/people")
-def people_page(request: Request):
-    people = []
-
-    try:
-        with db.connection_context():
-            people = list(
-                Person.select().order_by(Person.name)
-            )
     except Exception as error:
         print(f"People page database error: {error}")
 
     print("People count:", len(people))
-    print("Template path:", (BASE_DIR / "templates" / "people.html").resolve())
+
+    print(
+        "Template path:",
+        (BASE_DIR / "templates" / "people.html").resolve(),
+    )
+
     template_path = BASE_DIR / "templates" / "people.html"
-    print("Template contains form:", "photo-upload-form" in template_path.read_text(encoding="utf-8"))
+
+    print(
+        "Template contains form:",
+        "photo-upload-form" in template_path.read_text(
+            encoding="utf-8"
+        ),
+    )
+
     return templates.TemplateResponse(
         request=request,
         name="people.html",
         context={"people": people},
     )
+
+
+# ============================================================
+# UPDATE PERSON PROFILE IMAGE
+# ============================================================
+
 @app.post("/people/{person_id}/profile-image")
 async def update_person_profile_image(
     person_id: int,
     profile_image: UploadFile = File(...),
 ):
-    profile_dir = BASE_DIR / "static" / "uploads" / "people"
+
+    profile_dir = PROFILE_IMAGES_DIR
     new_profile_path = None
 
     try:
@@ -335,8 +394,10 @@ async def update_person_profile_image(
                 detail="Choose a JPEG, PNG, or WebP image.",
             )
 
-        # Read at most 5 MB plus one byte to enforce the limit.
-        raw = await profile_image.read(5 * 1024 * 1024 + 1)
+        # Read at most 5 MB plus one byte
+        raw = await profile_image.read(
+            5 * 1024 * 1024 + 1
+        )
 
         if not raw:
             raise HTTPException(
@@ -350,7 +411,7 @@ async def update_person_profile_image(
                 detail="The profile image must be 5 MB or smaller.",
             )
 
-        # Decode and validate the actual image, not just its filename.
+        # Decode and validate image
         image = cv2.imdecode(
             np.frombuffer(raw, dtype=np.uint8),
             cv2.IMREAD_COLOR,
@@ -362,7 +423,7 @@ async def update_person_profile_image(
                 detail="The uploaded file is not a valid image.",
             )
 
-        # Re-encode as JPEG so uploaded files have a consistent format.
+        # Convert to JPEG
         success, encoded = cv2.imencode(
             ".jpg",
             image,
@@ -375,47 +436,58 @@ async def update_person_profile_image(
                 detail="Could not process the uploaded image.",
             )
 
-        profile_dir.mkdir(parents=True, exist_ok=True)
+        profile_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
         new_filename = f"{uuid.uuid4().hex}.jpg"
         new_profile_path = profile_dir / new_filename
 
-        new_profile_path.write_bytes(encoded.tobytes())
+        new_profile_path.write_bytes(
+            encoded.tobytes()
+        )
 
         old_profile_url = person.profile_image
 
-        # Update only the profile_image field; face embeddings and
-        # attendance records are not modified.
+        # Update only the profile_image field
         try:
             with db.connection_context():
                 with db.atomic():
+
                     person.profile_image = (
                         f"/static/uploads/people/{new_filename}"
                     )
-                    person.save(only=[Person.profile_image])
+
+                    person.save(
+                        only=[Person.profile_image]
+                    )
 
         except Exception:
             new_profile_path.unlink(missing_ok=True)
             new_profile_path = None
             raise
 
-        # Remove the old image only if it was inside our profile folder.
+        # Remove old image only if it belongs to profile folder
         if old_profile_url:
+
             old_prefix = "/static/uploads/people/"
 
             if old_profile_url.startswith(old_prefix):
+
                 old_filename = old_profile_url[len(old_prefix):]
 
-                # Only allow a plain filename, never a path supplied by a user.
                 if (
                     old_filename
                     and Path(old_filename).name == old_filename
                     and old_filename != new_filename
                 ):
+
                     old_path = profile_dir / old_filename
 
                     try:
                         old_path.unlink(missing_ok=True)
+
                     except OSError as error:
                         print(
                             f"Could not delete old profile image: {error}",
@@ -431,6 +503,7 @@ async def update_person_profile_image(
         raise
 
     except Exception as error:
+
         if new_profile_path is not None:
             try:
                 new_profile_path.unlink(missing_ok=True)
@@ -451,6 +524,9 @@ async def update_person_profile_image(
         await profile_image.close()
 
 
+# ============================================================
+# EDIT PERSON PROFILE
+# ============================================================
 
 @app.post("/people/{person_id}/edit")
 async def edit_person_profile(
@@ -458,11 +534,12 @@ async def edit_person_profile(
     name: str = Form(...),
     profile_image: UploadFile | None = File(None),
 ):
+
     new_profile_path = None
-    profile_dir = BASE_DIR / "static" / "uploads" / "people"
+    profile_dir = PROFILE_IMAGES_DIR
 
     try:
-        # Validate the submitted name.
+        # Validate name
         person_name = name.strip()
 
         if not person_name:
@@ -478,7 +555,10 @@ async def edit_person_profile(
             )
 
         with db.connection_context():
-            person = Person.get_or_none(Person.id == person_id)
+
+            person = Person.get_or_none(
+                Person.id == person_id
+            )
 
             if person is None:
                 raise HTTPException(
@@ -486,7 +566,7 @@ async def edit_person_profile(
                     detail="Person not found.",
                 )
 
-            # Prevent duplicate names belonging to other people.
+            # Prevent duplicate names
             duplicate = Person.get_or_none(
                 (Person.name == person_name)
                 & (Person.id != person_id)
@@ -500,12 +580,12 @@ async def edit_person_profile(
 
             old_profile_url = person.profile_image
 
-        # Prepare the update. Keep the current photo unless
-        # the user has selected a replacement.
+        # Prepare update
         update_fields = [Person.name]
         person.name = person_name
 
         if profile_image is not None and profile_image.filename:
+
             allowed_types = {
                 "image/jpeg",
                 "image/png",
@@ -518,7 +598,9 @@ async def edit_person_profile(
                     detail="Choose a JPEG, PNG, or WebP image.",
                 )
 
-            raw = await profile_image.read(5 * 1024 * 1024 + 1)
+            raw = await profile_image.read(
+                5 * 1024 * 1024 + 1
+            )
 
             if not raw:
                 raise HTTPException(
@@ -555,19 +637,25 @@ async def edit_person_profile(
                     detail="Could not process the uploaded image.",
                 )
 
-            profile_dir.mkdir(parents=True, exist_ok=True)
+            profile_dir.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
             new_filename = f"{uuid.uuid4().hex}.jpg"
             new_profile_path = profile_dir / new_filename
 
-            new_profile_path.write_bytes(encoded.tobytes())
+            new_profile_path.write_bytes(
+                encoded.tobytes()
+            )
 
             person.profile_image = (
                 f"/static/uploads/people/{new_filename}"
             )
+
             update_fields.append(Person.profile_image)
 
-        # Save the name and optional photo update together.
+        # Save name and optional photo together
         try:
             with db.connection_context():
                 with db.atomic():
@@ -577,13 +665,16 @@ async def edit_person_profile(
             if new_profile_path is not None:
                 new_profile_path.unlink(missing_ok=True)
                 new_profile_path = None
+
             raise
 
-        # Delete the old photo only after the database update succeeds.
+        # Delete old photo after successful database update
         if new_profile_path is not None and old_profile_url:
+
             old_prefix = "/static/uploads/people/"
 
             if old_profile_url.startswith(old_prefix):
+
                 old_filename = old_profile_url[len(old_prefix):]
 
                 if (
@@ -591,10 +682,12 @@ async def edit_person_profile(
                     and Path(old_filename).name == old_filename
                     and old_filename != new_profile_path.name
                 ):
+
                     try:
                         (profile_dir / old_filename).unlink(
                             missing_ok=True
                         )
+
                     except OSError as error:
                         print(
                             f"Could not delete old profile photo: {error}",
@@ -607,6 +700,7 @@ async def edit_person_profile(
         )
 
     except IntegrityError:
+
         if new_profile_path is not None:
             new_profile_path.unlink(missing_ok=True)
 
@@ -616,18 +710,24 @@ async def edit_person_profile(
         )
 
     except HTTPException:
+
         if new_profile_path is not None:
             new_profile_path.unlink(missing_ok=True)
+
         raise
 
     except Exception as error:
+
         if new_profile_path is not None:
             try:
                 new_profile_path.unlink(missing_ok=True)
             except OSError:
                 pass
 
-        print(f"Person profile update error: {error}", flush=True)
+        print(
+            f"Person profile update error: {error}",
+            flush=True,
+        )
 
         raise HTTPException(
             status_code=500,
@@ -639,9 +739,13 @@ async def edit_person_profile(
             await profile_image.close()
 
 
+# ============================================================
+# ADD NEW PERSON PAGE
+# ============================================================
 
 @app.get("/people/new")
 def add_person_page(request: Request):
+
     return templates.TemplateResponse(
         request=request,
         name="add_person.html",
@@ -649,73 +753,95 @@ def add_person_page(request: Request):
     )
 
 
-# FaceAnalysis is loaded only when someone is registered through the web UI.
-# The browser captures frames from /video_feed, which is the configured RTSP network camera.
+# ============================================================
+# FACE REGISTRATION SETTINGS
+# ============================================================
+
 _registration_model = None
 _registration_model_lock = Lock()
+
 MIN_REGISTRATION_SAMPLES = 5
 MAX_REGISTRATION_SAMPLES = 20
 MAX_FRAME_BYTES = 5 * 1024 * 1024
-DATASET_DIR = PROJECT_ROOT / "Face-Collection" / "dataset"
 
+
+# ============================================================
+# LOAD INSIGHTFACE MODEL
+# ============================================================
 
 def get_registration_model():
-    global _registration_model
-    with _registration_model_lock:
-        if _registration_model is None:
-            from insightface.app import FaceAnalysis
 
-            # Keep registration stable and independent from the live-recognition process.
-            # GPU can be enabled later after the ONNX CUDA dependencies are confirmed.
+    global _registration_model
+
+    with _registration_model_lock:
+
+        if _registration_model is None:
+
+            from insightface.app import FaceAnalysis
+            '''
+            # CPU provider for registration
             model = FaceAnalysis(
                 name="buffalo_l",
                 providers=["CPUExecutionProvider"],
             )
-            model.prepare(ctx_id=-1, det_size=(640, 640))
+            '''
+            if getattr(sys, "frozen", False):
+                insightface_root = (
+                    Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+                    / "SmartEntry"
+                    / ".insightface"
+                )
+            else:
+                insightface_root = Path.home() / ".insightface"
+
+
+            model = FaceAnalysis(
+                name="buffalo_l",
+                root=str(insightface_root),
+                providers=["CPUExecutionProvider"],
+            )
+            model.prepare(
+                ctx_id=-1,
+                det_size=(640, 640),
+            )
+
             _registration_model = model
+
     return _registration_model
 
 
+# ============================================================
+# DECODE CAMERA FRAME
+# ============================================================
+
 def _decode_camera_frame(data_url: str):
-    if not isinstance(data_url, str) or not data_url.startswith("data:image/jpeg;base64,"):
-        raise ValueError("A captured JPEG frame is invalid. Capture it again.")
+
+    if (
+        not isinstance(data_url, str)
+        or not data_url.startswith("data:image/jpeg;base64,")
+    ):
+        raise ValueError(
+            "A captured JPEG frame is invalid. Capture it again."
+        )
+
     try:
-        raw = base64.b64decode(data_url.split(",", 1)[1], validate=True)
+        raw = base64.b64decode(
+            data_url.split(",", 1)[1],
+            validate=True,
+        )
+
     except Exception as exc:
-        raise ValueError("A captured frame could not be decoded.") from exc
+        raise ValueError(
+            "A captured frame could not be decoded."
+        ) from exc
+
     if not raw:
         raise ValueError("A captured frame is empty.")
-    if len(raw) > MAX_FRAME_BYTES:
-        raise ValueError("Each captured frame must be 5 MB or smaller.")
-    image = cv2.imdecode(np.frombuffer(raw, dtype=np.uint8), cv2.IMREAD_COLOR)
-    if image is None:
-        raise ValueError("A captured frame is not a valid image.")
-    return raw, image
-
-
-def _decode_profile_image(data_url: str) -> bytes:
-    allowed_prefixes = (
-        "data:image/jpeg;base64,",
-        "data:image/png;base64,",
-        "data:image/webp;base64,",
-    )
-
-    if not isinstance(data_url, str) or not data_url.startswith(
-        allowed_prefixes
-    ):
-        raise ValueError("Choose a valid JPEG, PNG, or WebP profile image.")
-
-    try:
-        encoded_data = data_url.split(",", 1)[1]
-        raw = base64.b64decode(encoded_data, validate=True)
-    except Exception as exc:
-        raise ValueError("The profile image could not be decoded.") from exc
-
-    if not raw:
-        raise ValueError("The profile image is empty.")
 
     if len(raw) > MAX_FRAME_BYTES:
-        raise ValueError("The profile image must be 5 MB or smaller.")
+        raise ValueError(
+            "Each captured frame must be 5 MB or smaller."
+        )
 
     image = cv2.imdecode(
         np.frombuffer(raw, dtype=np.uint8),
@@ -723,9 +849,65 @@ def _decode_profile_image(data_url: str) -> bytes:
     )
 
     if image is None:
-        raise ValueError("The selected profile image is invalid.")
+        raise ValueError(
+            "A captured frame is not a valid image."
+        )
 
-    # Always save the result as a JPEG, regardless of the source format.
+    return raw, image
+
+
+# ============================================================
+# DECODE PROFILE IMAGE
+# ============================================================
+
+def _decode_profile_image(data_url: str):
+
+    allowed_prefixes = (
+        "data:image/jpeg;base64,",
+        "data:image/png;base64,",
+        "data:image/webp;base64,",
+    )
+
+    if (
+        not isinstance(data_url, str)
+        or not data_url.startswith(allowed_prefixes)
+    ):
+        raise ValueError(
+            "Choose a valid JPEG, PNG, or WebP profile image."
+        )
+
+    try:
+        encoded_data = data_url.split(",", 1)[1]
+
+        raw = base64.b64decode(
+            encoded_data,
+            validate=True,
+        )
+
+    except Exception as exc:
+        raise ValueError(
+            "The profile image could not be decoded."
+        ) from exc
+
+    if not raw:
+        raise ValueError("The profile image is empty.")
+
+    if len(raw) > MAX_FRAME_BYTES:
+        raise ValueError(
+            "The profile image must be 5 MB or smaller."
+        )
+
+    image = cv2.imdecode(
+        np.frombuffer(raw, dtype=np.uint8),
+        cv2.IMREAD_COLOR,
+    )
+
+    if image is None:
+        raise ValueError(
+            "The selected profile image is invalid."
+        )
+
+    # Always save as JPEG
     success, encoded_image = cv2.imencode(
         ".jpg",
         image,
@@ -733,14 +915,23 @@ def _decode_profile_image(data_url: str) -> bytes:
     )
 
     if not success:
-        raise ValueError("Could not convert the profile image to JPEG.")
+        raise ValueError(
+            "Could not convert the profile image to JPEG."
+        )
 
     return encoded_image.tobytes()
 
+
+# ============================================================
+# REGISTER PERSON FROM NETWORK CAMERA
+# ============================================================
+
 @app.post("/people/new")
 async def create_person_from_network_camera(request: Request):
+
     try:
         payload = await request.json()
+
     except Exception:
         raise HTTPException(
             status_code=400,
@@ -753,17 +944,22 @@ async def create_person_from_network_camera(request: Request):
             detail="Invalid registration request.",
         )
 
-    person_name = str(payload.get("name", "")).strip()
+    person_name = str(
+        payload.get("name", "")
+    ).strip()
+
     samples = payload.get("samples", [])
 
     profile_image_data = payload.get("profileImage")
     profile_image_bytes = None
 
     if profile_image_data:
+
         try:
             profile_image_bytes = _decode_profile_image(
                 profile_image_data
             )
+
         except ValueError as error:
             raise HTTPException(
                 status_code=400,
@@ -796,10 +992,13 @@ async def create_person_from_network_camera(request: Request):
             ),
         )
 
-    # Create a safe folder name for the dataset.
+    # Create a safe folder name for dataset
     safe_name = (
-        re.sub(r"[^A-Za-z0-9._-]+", "_", person_name)
-        .strip("._-")
+        re.sub(
+            r"[^A-Za-z0-9._-]+",
+            "_",
+            person_name,
+        ).strip("._-")
         or "person"
     )
 
@@ -810,29 +1009,38 @@ async def create_person_from_network_camera(request: Request):
     created_person = False
 
     try:
-        # Check whether this person is already registered.
+        # Check existing person
         with db.connection_context():
+
             if Person.get_or_none(Person.name == person_name):
                 raise HTTPException(
                     status_code=409,
                     detail="A person with this name already exists.",
                 )
 
-        # Load InsightFace only when registration is requested.
+        # Load InsightFace model
         face_app = get_registration_model()
+
         processed = []
 
-        for index, data_url in enumerate(samples, start=1):
+        for index, data_url in enumerate(
+            samples,
+            start=1,
+        ):
+
             try:
                 raw, image = _decode_camera_frame(data_url)
+
             except ValueError as error:
+
                 print(
                     f"Skipping invalid sample {index}: {error}",
                     flush=True,
                 )
+
                 continue
 
-            # Add padding around the camera frame.
+            # Add padding around camera frame
             height, width = image.shape[:2]
             padding = int(max(height, width) * 0.25)
 
@@ -847,13 +1055,15 @@ async def create_person_from_network_camera(request: Request):
 
             faces = face_app.get(padded)
 
-            # Accept only frames containing exactly one detected face.
+            # Exactly one face is required
             if len(faces) != 1:
+
                 print(
                     f"Skipping sample {index}: "
                     f"detected {len(faces)} faces; expected 1.",
                     flush=True,
                 )
+
                 continue
 
             embedding = np.asarray(
@@ -862,15 +1072,21 @@ async def create_person_from_network_camera(request: Request):
             )
 
             if embedding.shape != (512,):
+
                 print(
                     f"Skipping sample {index}: "
                     f"invalid embedding shape {embedding.shape}.",
                     flush=True,
                 )
+
                 continue
 
             processed.append(
-                (raw, embedding.tolist(), index)
+                (
+                    raw,
+                    embedding.tolist(),
+                    index,
+                )
             )
 
         print(
@@ -879,6 +1095,7 @@ async def create_person_from_network_camera(request: Request):
         )
 
         if len(processed) < MIN_REGISTRATION_SAMPLES:
+
             raise HTTPException(
                 status_code=422,
                 detail=(
@@ -890,55 +1107,66 @@ async def create_person_from_network_camera(request: Request):
                 ),
             )
 
-        # Ensure the dataset root and this person's folder exist.
-        DATASET_DIR.mkdir(parents=True, exist_ok=True)
-        person_dir.mkdir(parents=True, exist_ok=True)
+        # Ensure dataset directories exist
+        DATASET_DIR.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
-        # Save the profile photo separately.
-        '''
-        profile_dir = BASE_DIR / "static" / "uploads" / "people"
-        profile_dir.mkdir(parents=True, exist_ok=True)
+        person_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
-        profile_name = f"{uuid.uuid4().hex}.jpg"
-        profile_path = profile_dir / profile_name
+        # Save selected profile image or use first camera sample
+        profile_dir = PROFILE_IMAGES_DIR
 
-        # Use the first valid camera sample as the profile image.
-        profile_path.write_bytes(processed[0][0])
-        saved_files.append(profile_path)
-        '''
-
-        
-        # Save the selected profile image, or fall back to the camera.
-        profile_dir = BASE_DIR / "static" / "uploads" / "people"
-        profile_dir.mkdir(parents=True, exist_ok=True)
+        profile_dir.mkdir(
+            parents=True,
+            exist_ok=True,
+        )
 
         profile_name = f"{uuid.uuid4().hex}.jpg"
         profile_path = profile_dir / profile_name
 
         if profile_image_bytes is not None:
-            profile_path.write_bytes(profile_image_bytes)
+
+            profile_path.write_bytes(
+                profile_image_bytes
+            )
+
         else:
-            profile_path.write_bytes(processed[0][0])
+
+            profile_path.write_bytes(
+                processed[0][0]
+            )
 
         saved_files.append(profile_path)
 
-
-        # Create the database record and embeddings transactionally.
+        # Create database record and embeddings transactionally
         with db.connection_context():
+
             with db.atomic():
+
                 person = Person.create(
                     name=person_name,
-                    profile_image=f"/static/uploads/people/{profile_name}",
+                    profile_image=(
+                        f"/static/uploads/people/{profile_name}"
+                    ),
                 )
+
                 created_person = True
 
                 for raw, embedding, index in processed:
+
                     filename = f"camera_{index:02d}.jpg"
                     target = person_dir / filename
 
-                    # Never overwrite a file from an earlier registration.
+                    # Never overwrite an existing dataset file
                     suffix = index
+
                     while target.exists():
+
                         suffix += 1
                         filename = f"camera_{suffix:02d}.jpg"
                         target = person_dir / filename
@@ -968,21 +1196,29 @@ async def create_person_from_network_camera(request: Request):
         }
 
     except HTTPException:
-        # Remove files created during an unsuccessful registration.
+
+        # Remove files created during failed registration
         for path in saved_files:
+
             try:
                 path.unlink(missing_ok=True)
+
             except OSError as cleanup_error:
+
                 print(
                     f"File cleanup error: {cleanup_error}",
                     flush=True,
                 )
+
         raise
 
     except IntegrityError:
+
         for path in saved_files:
+
             try:
                 path.unlink(missing_ok=True)
+
             except OSError:
                 pass
 
@@ -992,27 +1228,33 @@ async def create_person_from_network_camera(request: Request):
         )
 
     except Exception as error:
+
         print(
             f"Camera registration error: {error}",
             flush=True,
         )
 
-        # Remove files written by this registration attempt.
+        # Remove files created by this registration attempt
         for path in saved_files:
+
             try:
                 path.unlink(missing_ok=True)
+
             except OSError as cleanup_error:
+
                 print(
                     f"File cleanup error: {cleanup_error}",
                     flush=True,
                 )
 
-        # If the database transaction failed, remove any remaining
-        # person/embedding records from this unsuccessful attempt.
+        # Clean up unsuccessful database registration
         if created_person and person is not None:
+
             try:
                 with db.connection_context():
+
                     with db.atomic():
+
                         FaceEmbedding512.delete().where(
                             FaceEmbedding512.person == person
                         ).execute()
@@ -1022,6 +1264,7 @@ async def create_person_from_network_camera(request: Request):
                         ).execute()
 
             except Exception as cleanup_error:
+
                 print(
                     f"Database cleanup error: {cleanup_error}",
                     flush=True,
@@ -1035,31 +1278,41 @@ async def create_person_from_network_camera(request: Request):
             ),
         )
 
+
+# ============================================================
+# PERSON DETAIL AND ATTENDANCE HISTORY
+# ============================================================
+
 @app.get("/people/{person_id}")
 def person_detail(
     request: Request,
     person_id: int,
     filter_date: date | None = None,
 ):
+
     print("HISTORY ROUTE REACHED!", flush=True)
-    print(">>> PERSON DETAIL ROUTE CALLED <<<", flush=True)
-    print(">>> PERSON ID:", person_id, flush=True)
-    print(">>> FILTER DATE:", filter_date, flush=True)
+    print("PERSON ID:", person_id, flush=True)
+    print("FILTER DATE:", filter_date, flush=True)
 
     person = None
     entry_logs = []
 
     try:
         with db.connection_context():
-            person = Person.get_or_none(Person.id == person_id)
+
+            person = Person.get_or_none(
+                Person.id == person_id
+            )
 
             if person is not None:
+
                 logs_query = EntryLog.select().where(
                     EntryLog.person == person
                 )
 
-                # Filter records by the selected date.
+                # Filter records by selected date
                 if filter_date is not None:
+
                     logs_query = logs_query.where(
                         EntryLog.entry_date == filter_date
                     )
@@ -1071,11 +1324,20 @@ def person_detail(
 
                 entry_logs = get_entry_logs(logs_query)
 
-                print("Person:", person.name, flush=True)
-                print("Today's date:", date.today(), flush=True)
-                print("History records:", len(entry_logs), flush=True)
+                print(
+                    "Person:",
+                    person.name,
+                    flush=True,
+                )
+
+                print(
+                    "History records:",
+                    len(entry_logs),
+                    flush=True,
+                )
 
                 for log in entry_logs:
+
                     print(
                         log["entry_date"],
                         log["entry_time"],
@@ -1084,10 +1346,14 @@ def person_detail(
                     )
 
     except Exception as error:
-        print(f"Person detail database error: {error}", flush=True)
+
+        print(
+            f"Person detail database error: {error}",
+            flush=True,
+        )
 
     if person is None:
-        from fastapi import HTTPException
+
         raise HTTPException(
             status_code=404,
             detail="Person not found",
@@ -1103,5 +1369,3 @@ def person_detail(
             "filter_date": filter_date,
         },
     )
-
-

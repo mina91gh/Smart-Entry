@@ -88,13 +88,33 @@ if not RTSP_URL:
         "Configure the camera URL in smart-entry.env."
     )
 
+'''
 # CPU only until the cuDNN issue is resolved.
 FACE_APP = FaceAnalysis(
     name="buffalo_l",
     #providers=["CUDAExecutionProvider", "CPUExecutionProvider"],
     providers=["CPUExecutionProvider"]
 )
+'''
 
+
+# InsightFace model directory
+if getattr(sys, "frozen", False):
+    INSIGHTFACE_ROOT = (
+        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+        / "SmartEntry"
+        / ".insightface"
+    )
+else:
+    INSIGHTFACE_ROOT = Path.home() / ".insightface"
+
+
+# CPU only until the cuDNN issue is resolved.
+FACE_APP = FaceAnalysis(
+    name="buffalo_l",
+    root=str(INSIGHTFACE_ROOT),
+    providers=["CPUExecutionProvider"],
+)
 FACE_APP.prepare(
     ctx_id=0,
     det_size=(640, 640),
