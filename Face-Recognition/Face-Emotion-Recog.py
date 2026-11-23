@@ -10,6 +10,8 @@ from queue import Queue, Empty
 from datetime import datetime
 
 from insightface.app import FaceAnalysis
+from insightface.app.common import Face
+
 
 from model import db, FaceEmbedding512, EntryLog
 from Emotion_Detection import (
@@ -67,11 +69,16 @@ WINDOW_NAME = "Smart Entry System"
 # Must be calibrated using real camera footage.
 SIMILARITY_THRESHOLD = 0.45
 
-DETECTION_INTERVAL = 5
-RECOGNITION_INTERVAL = 5
-EMOTION_INTERVAL = 5
+DETECTION_INTERVAL = 20
+RECOGNITION_INTERVAL = 20
+EMOTION_INTERVAL = 15
 
-SCALE = 0.5
+SCALE = 0.35
+MATCH_IOU_THRESHOLD = 0.3
+VERIFY_SECONDS = 5.0
+MAX_MISSES = 3
+DET_THRESHOLD = 0.5
+
 ENTRY_COOLDOWN = 30
 '''
 RTSP_URL = os.getenv(
@@ -326,6 +333,23 @@ def camera_reader():
         cap.release()
         print("Camera thread stopped")
 
+def iou(box_a, box_b):
+    """Intersection over Union for two (x1, y1, x2, y2) boxes."""
+
+    ax1, ay1, ax2, ay2 = box_a
+    bx1, by1, bx2, by2 = box_b
+
+    inter_w = max(0, min(ax2, bx2) - max(ax1, bx1))
+    inter_h = max(0, min(ay2, by2) - max(ay1, by1))
+    inter_area = inter_w * inter_h
+
+    if inter_area == 0:
+        return 0.0
+
+    area_a = max(0, ax2 - ax1) * max(0, ay2 - ay1)
+    area_b = max(0, bx2 - bx1) * max(0, by2 - by1)
+
+    return inter_area / float(area_a + area_b - inter_area)
 
 # ==================================================
 # AI Thread
@@ -375,18 +399,27 @@ def ai_worker():
             # ==================================================
             # Detection and Tracking
             # ==================================================
-
+        
             if frame_count % DETECTION_INTERVAL == 0:
 
                 # InsightFace returns both bounding boxes
                 # and 512D embeddings.
-                detected_faces = FACE_APP.get(small_frame)
+                bboxes, kpss = FACE_APP.det_model.detect(
+                    small_frame,
+                    max_num=0,
+                    metric="default",
+                )
 
-                tracked_faces = []
+                now = time.monotonic()
 
-                for detected in detected_faces:
+                detections = []
 
-                    x1, y1, x2, y2 = detected.bbox
+                for index in range(bboxes.shape[0]):
+
+                    x1, y1, x2, y2, det_score = bboxes[index]
+
+                    if det_score < DET_THRESHOLD:
+                        continue
 
                     left = max(
                         0, int(x1 / SCALE)
@@ -406,36 +439,150 @@ def ai_worker():
                     if right <= left or bottom <= top:
                         continue
 
-                    # Recognition is evaluated at the configured
-                    # interval; detection already provides embeddings.
-                    if frame_count % RECOGNITION_INTERVAL == 0:
-                        result = recognize_face(detected.embedding)
-                    else:
-                        result = {
-                            "name": "Unknown",
-                            "distance": None,
-                            "person_id": None,
-                        }
+                    kps = None
 
-                    tracker = cv2.legacy.TrackerKCF_create()
+                    if kpss is not None and kpss.shape[0] > index:
+                        kps = kpss[index]
 
-                    tracker.init(
-                        frame,
-                        (
-                            left,
-                            top,
-                            right - left,
-                            bottom - top,
-                        ),
+                    face = Face(
+                        bbox=bboxes[index, 0:4],
+                        kps=kps,
+                        det_score=float(det_score),
                     )
 
-                    tracked_faces.append({
-                        "tracker": tracker,
-                        "box": (top, right, bottom, left),
-                        "result": result,
-                        "emotion": "unknown",
-                        "emotion_score": 0.0,
-                    })
+                    detections.append(
+                        (left, top, right, bottom, face)
+                    )
+
+
+                matched_indices = set()
+                new_faces = []
+
+                # Match each detection to an existing tracked
+                # face so its identity is kept between frames.
+                for left, top, right, bottom, detected in detections:
+
+                    best_iou = 0.0
+                    best_index = None
+
+                    for index, face_state in enumerate(tracked_faces):
+
+                        if index in matched_indices:
+                            continue
+
+                        prev_top, prev_right, prev_bottom, prev_left = (
+                            face_state["box"]
+                        )
+
+                        overlap = iou(
+                            (left, top, right, bottom),
+                            (prev_left, prev_top, prev_right, prev_bottom),
+                        )
+
+                        if overlap > best_iou:
+                            best_iou = overlap
+                            best_index = index
+
+                    if (
+                        best_index is not None
+                        and best_iou >= MATCH_IOU_THRESHOLD
+                    ):
+
+                        matched_indices.add(best_index)
+                        face_state = tracked_faces[best_index]
+
+                        # Re-anchor the tracker on the fresh box.
+                        face_state["tracker"] = (
+                            cv2.TrackerDaSiamRPN_create()
+                        )
+
+                        face_state["tracker"].init(
+                            frame,
+                            (
+                                left,
+                                top,
+                                right - left,
+                                bottom - top,
+                            ),
+                        )
+
+                        face_state["box"] = (
+                            top,
+                            right,
+                            bottom,
+                            left,
+                        )
+
+                        # Re-verify identity only every few seconds.
+                        last_verified = face_state.get(
+                            "last_verified",
+                            0,
+                        )
+                        if now - last_verified > VERIFY_SECONDS:
+
+                            embedding = FACE_APP.rec_model.get(
+                                small_frame,
+                                detected,
+                            )
+
+                            face_state["result"] = recognize_face(
+                                embedding
+                            )
+                            face_state["last_verified"] = now
+
+
+                    else:
+
+                        # New face: recognize it exactly once.
+                        embedding = FACE_APP.rec_model.get(
+                            small_frame,
+                            detected,
+                        )
+
+                        result = recognize_face(
+                            embedding
+                        )
+
+
+                        tracker = cv2.TrackerDaSiamRPN_create()
+
+                        tracker.init(
+                            frame,
+                            (
+                                left,
+                                top,
+                                right - left,
+                                bottom - top,
+                            ),
+                        )
+
+                        new_faces.append({
+                            "tracker": tracker,
+                            "box": (top, right, bottom, left),
+                            "result": result,
+                            "emotion": "unknown",
+                            "emotion_score": 0.0,
+                            "last_verified": now,
+                        })
+
+                # Drop faces that detection missed too many
+                # times in a row.
+                for index, face_state in enumerate(tracked_faces):
+
+                    if index in matched_indices:
+                        face_state["misses"] = 0
+                    else:
+                        face_state["misses"] = (
+                            face_state.get("misses", 0) + 1
+                        )
+
+                tracked_faces = [
+                    face_state
+                    for face_state in tracked_faces
+                    if face_state.get("misses", 0) <= MAX_MISSES
+                ]
+
+                tracked_faces.extend(new_faces)
 
             else:
 

@@ -153,6 +153,11 @@ def generate_camera_frames(cap):
             if not success:
                 break
 
+            width = min(960, frame.shape[1])
+            height = int(frame.shape[0] * (width / frame.shape[1]))
+            frame = cv2.resize(frame, (width, height))
+
+
             encoded, buffer = cv2.imencode(
                 ".jpg",
                 frame,

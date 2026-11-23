@@ -70,6 +70,7 @@ face_process = None
 
 
 def run_web_server():
+    load_server_config()
     sys.path.insert(0, str(FACE_RECOGNITION_DIR))
     sys.path.insert(0, str(WEB_UI_DIR))
 
@@ -98,6 +99,7 @@ def run_web_server():
 
 
 def run_face_recognition():
+    load_server_config()
     sys.path.insert(0, str(FACE_RECOGNITION_DIR))
 
     script = FACE_RECOGNITION_DIR / "Face-Emotion-Recog.py"
