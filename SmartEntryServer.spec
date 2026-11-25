@@ -11,7 +11,12 @@ datas = [
     ('Web-UI/static/style.css', 'Web-UI/static'),
     ('Web-UI/static/default-avatar.svg', 'Web-UI/static'),
 
-    ('Face-Recognition', 'Face-Recognition'),
+    ('Face-Recognition/model.py', 'Face-Recognition'),
+    ('Face-Recognition/Emotion_Detection.py', 'Face-Recognition'),
+    ('Face-Recognition/Face-Emotion-Recog.py', 'Face-Recognition'),
+    ('Face-Recognition/Face_Recognition.py', 'Face-Recognition'),
+    ('Face-Recognition/Load_Embeddings.py', 'Face-Recognition'),
+    ('Face-Recognition/save_insightface_embeddings.py', 'Face-Recognition'),
 
     (
         'smile-env/Lib/site-packages/insightface/data/objects',

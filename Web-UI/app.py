@@ -9,6 +9,8 @@ import cv2
 import uuid
 import base64
 import re
+import time
+import urllib.request
 import numpy as np
 
 from fastapi import (
@@ -145,7 +147,45 @@ print("RTSP CONFIGURED:", bool(SMART_ENTRY_RTSP_URL))
 # CAMERA STREAM
 # ============================================================
 
-def generate_camera_frames(cap):
+# The face-recognition process owns the camera and serves a local MJPEG
+# stream. The dashboard proxies it so the camera is opened only once.
+MJPEG_PROXY_URL = "http://127.0.0.1:8091/video.mjpg"
+
+
+def generate_local_camera_stream():
+    last_logged = 0.0
+
+    while True:
+        try:
+            with urllib.request.urlopen(
+                MJPEG_PROXY_URL,
+                timeout=3,
+            ) as stream:
+                while True:
+                    chunk = stream.read(8192)
+
+                    if not chunk:
+                        break
+
+                    yield chunk
+
+            break
+
+        except Exception as error:
+            now = time.monotonic()
+
+            if now - last_logged > 10:
+                print(
+                    "Local camera stream unavailable: "
+                    f"{error}",
+                    flush=True,
+                )
+                last_logged = now
+
+            time.sleep(1)
+
+
+def generate_rtsp_stream(cap):
     try:
         while True:
             success, frame = cap.read()
@@ -156,7 +196,6 @@ def generate_camera_frames(cap):
             width = min(960, frame.shape[1])
             height = int(frame.shape[0] * (width / frame.shape[1]))
             frame = cv2.resize(frame, (width, height))
-
 
             encoded, buffer = cv2.imencode(
                 ".jpg",
@@ -181,14 +220,30 @@ def generate_camera_frames(cap):
 @app.get("/video_feed")
 def video_feed():
 
+    # Prefer the webcam stream served by the face-recognition process.
+    try:
+        urllib.request.urlopen(
+            MJPEG_PROXY_URL,
+            timeout=3,
+        ).close()
+
+        return StreamingResponse(
+            generate_local_camera_stream(),
+            media_type="multipart/x-mixed-replace; boundary=frame",
+        )
+
+    except Exception:
+        pass
+
+    # Fallback: an RTSP camera configured in smart-entry.env.
     camera_url = SMART_ENTRY_RTSP_URL.strip()
 
     if not camera_url:
-        print("ERROR: SMART_ENTRY_RTSP_URL is empty!")
-
         raise HTTPException(
             status_code=503,
-            detail="Camera RTSP URL is not configured.",
+            detail="Camera stream unavailable. "
+            "Start the face-recognition process or configure "
+            "SMART_ENTRY_RTSP_URL.",
         )
 
     print("RTSP URL is configured.")
@@ -213,7 +268,7 @@ def video_feed():
     print("Camera connected successfully!")
 
     return StreamingResponse(
-        generate_camera_frames(cap),
+        generate_rtsp_stream(cap),
         media_type="multipart/x-mixed-replace; boundary=frame",
     )
 

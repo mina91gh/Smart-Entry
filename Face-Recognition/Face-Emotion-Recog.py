@@ -9,6 +9,11 @@ from threading import Thread, Event
 from queue import Queue, Empty
 from datetime import datetime
 
+from http.server import (
+    BaseHTTPRequestHandler,
+    ThreadingHTTPServer,
+)
+
 from insightface.app import FaceAnalysis
 from insightface.app.common import Face
 
@@ -90,9 +95,10 @@ RTSP_URL = os.getenv(
 RTSP_URL = os.getenv("SMART_ENTRY_RTSP_URL", "").strip()
 
 if not RTSP_URL:
-    raise RuntimeError(
-        "SMART_ENTRY_RTSP_URL is missing. "
-        "Configure the camera URL in smart-entry.env."
+    print(
+        "SMART_ENTRY_RTSP_URL is not set; "
+        "the local webcam will be used.",
+        flush=True,
     )
 
 '''
@@ -114,6 +120,45 @@ if getattr(sys, "frozen", False):
     )
 else:
     INSIGHTFACE_ROOT = Path.home() / ".insightface"
+
+
+# DaSiamRPN tracker ONNX models
+# OpenCV reads OPENCV_DNN_TRACKER_MODEL_PATH only at cv2 import time,
+# so pass the model paths explicitly instead.
+if getattr(sys, "frozen", False):
+    TRACKER_MODELS_DIR = (
+        Path(os.environ.get("PROGRAMDATA", r"C:\ProgramData"))
+        / "SmartEntry"
+        / "Face-Recognition"
+        / "tracker_models"
+    )
+
+    if not TRACKER_MODELS_DIR.is_dir():
+        TRACKER_MODELS_DIR = (
+            Path(sys._MEIPASS)
+            / "Face-Recognition"
+            / "tracker_models"
+        )
+else:
+    TRACKER_MODELS_DIR = (
+        Path(__file__).resolve().parent / "tracker_models"
+    )
+
+
+def create_dasiamrpn_tracker():
+    params = cv2.TrackerDaSiamRPN_Params()
+
+    params.model = str(
+        TRACKER_MODELS_DIR / "dasiamrpn_model.onnx"
+    )
+    params.kernel_cls1 = str(
+        TRACKER_MODELS_DIR / "dasiamrpn_kernel_cls1.onnx"
+    )
+    params.kernel_r1 = str(
+        TRACKER_MODELS_DIR / "dasiamrpn_kernel_r1.onnx"
+    )
+
+    return cv2.TrackerDaSiamRPN_create(params)
 
 
 # CPU only until the cuDNN issue is resolved.
@@ -297,7 +342,8 @@ def recognize_face(embedding):
 
 def camera_reader():
 
-    cap = cv2.VideoCapture(RTSP_URL)
+    #cap = cv2.VideoCapture(RTSP_URL)
+    cap = cv2.VideoCapture(0)
 
     cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
@@ -493,7 +539,7 @@ def ai_worker():
 
                         # Re-anchor the tracker on the fresh box.
                         face_state["tracker"] = (
-                            cv2.TrackerDaSiamRPN_create()
+                            create_dasiamrpn_tracker()
                         )
 
                         face_state["tracker"].init(
@@ -520,9 +566,11 @@ def ai_worker():
                         )
                         if now - last_verified > VERIFY_SECONDS:
 
-                            embedding = FACE_APP.rec_model.get(
-                                small_frame,
-                                detected,
+                            embedding = (
+                                FACE_APP.models["recognition"].get(
+                                    small_frame,
+                                    detected,
+                                )
                             )
 
                             face_state["result"] = recognize_face(
@@ -534,7 +582,7 @@ def ai_worker():
                     else:
 
                         # New face: recognize it exactly once.
-                        embedding = FACE_APP.rec_model.get(
+                        embedding = FACE_APP.models["recognition"].get(
                             small_frame,
                             detected,
                         )
@@ -544,7 +592,7 @@ def ai_worker():
                         )
 
 
-                        tracker = cv2.TrackerDaSiamRPN_create()
+                        tracker = create_dasiamrpn_tracker()
 
                         tracker.init(
                             frame,
@@ -801,10 +849,92 @@ def ai_worker():
 
 
 # ==================================================
+# Local MJPEG Stream Server
+# ==================================================
+# This process owns the webcam, so it serves an annotated MJPEG stream
+# on localhost. The web dashboard proxies this stream for live monitoring.
+
+MJPEG_HOST = "127.0.0.1"
+MJPEG_PORT = 8091
+
+mjpeg_frame = b""
+mjpeg_lock = Lock()
+
+
+class _MjpegHandler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        if self.path != "/video.mjpg":
+            self.send_response(404)
+            self.end_headers()
+            return
+
+        self.send_response(200)
+        self.send_header(
+            "Content-Type",
+            "multipart/x-mixed-replace; boundary=frame",
+        )
+        self.send_header("Cache-Control", "no-cache")
+        self.end_headers()
+
+        try:
+            while not stop_event.is_set():
+                with mjpeg_lock:
+                    chunk = mjpeg_frame
+
+                if chunk:
+                    self.wfile.write(
+                        b"--frame\r\n"
+                        b"Content-Type: image/jpeg\r\n\r\n"
+                        + chunk
+                        + b"\r\n"
+                    )
+
+                time.sleep(0.05)
+
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            pass
+
+    def log_message(self, *args):
+        pass
+
+
+def start_mjpeg_server():
+    try:
+        server = ThreadingHTTPServer(
+            (MJPEG_HOST, MJPEG_PORT),
+            _MjpegHandler,
+        )
+
+    except OSError as error:
+        print(
+            f"MJPEG server could not start: {error}",
+            flush=True,
+        )
+        return None
+
+    thread = Thread(
+        target=server.serve_forever,
+        daemon=True,
+    )
+    thread.start()
+
+    print(
+        "MJPEG stream ready at "
+        f"http://{MJPEG_HOST}:{MJPEG_PORT}/video.mjpg",
+        flush=True,
+    )
+
+    return server
+
+
+# ==================================================
 # Main Display Loop
 # ==================================================
 
 def main():
+
+    global mjpeg_frame
 
     print("MAIN STARTED")
 
@@ -820,6 +950,8 @@ def main():
 
     camera_thread.start()
     ai_thread.start()
+
+    start_mjpeg_server()
 
     print("Camera thread started")
     print("AI thread started")
@@ -890,6 +1022,16 @@ def main():
                 (255, 255, 255),
                 2,
             )
+
+            ok, jpeg = cv2.imencode(
+                ".jpg",
+                frame,
+                [cv2.IMWRITE_JPEG_QUALITY, 70],
+            )
+
+            if ok:
+                with mjpeg_lock:
+                    mjpeg_frame = jpeg.tobytes()
 
             cv2.imshow(WINDOW_NAME, frame)
 

@@ -39,6 +39,9 @@ Name: "{commonappdata}\SmartEntry"
 ; InsightFace models directory.
 Name: "{commonappdata}\SmartEntry\.insightface\models\buffalo_l"; Permissions: users-readexec; Check: IsServerInstall
 
+; DaSiamRPN tracker models directory.
+Name: "{commonappdata}\SmartEntry\Face-Recognition\tracker_models"; Permissions: users-readexec; Check: IsServerInstall
+
 ; Face dataset directory.
 Name: "{commonappdata}\SmartEntry\Face-Collection\dataset"; Permissions: users-modify; Check: IsServerInstall
 
@@ -70,6 +73,8 @@ Source: "dist\SmartEntryAdmin.exe"; DestDir: "{app}\Admin"; Flags: ignoreversion
 ; ==============================
 
 Source: "installer-payload\models\buffalo_l\*"; DestDir: "{commonappdata}\SmartEntry\.insightface\models\buffalo_l"; Flags: onlyifdoesntexist; Check: IsServerInstall
+
+Source: "installer-payload\models\tracker_models\*"; DestDir: "{commonappdata}\SmartEntry\Face-Recognition\tracker_models"; Flags: onlyifdoesntexist; Check: IsServerInstall
 
 
 
@@ -176,11 +181,12 @@ begin
   CameraPage := CreateInputQueryPage(
     ServerPage.ID,
     'Camera Configuration',
-    'Configure the Network Camera',
-    'Enter the RTSP URL of your network camera.'
+    'Configure the Camera',
+    'Enter the RTSP URL of your network camera, ' +
+    'or leave it empty to use the local webcam.'
   );
 
-  CameraPage.Add('RTSP camera URL:', False);
+  CameraPage.Add('RTSP camera URL (empty = local webcam):', False);
   CameraPage.Values[0] := '';
   ClientPage := CreateInputQueryPage(
     CameraPage.ID,
@@ -260,16 +266,15 @@ begin
   
   if (CurPageID = CameraPage.ID) and IsServerInstall then
   begin
-    if Trim(CameraPage.Values[0]) = '' then
+    if (Trim(CameraPage.Values[0]) <> '') and
+       (Pos('rtsp://', Lowercase(Trim(CameraPage.Values[0]))) <> 1) then
     begin
-      MsgBox('RTSP camera URL is required.', mbError, MB_OK);
-      Result := False;
-      Exit;
-    end;
-
-    if Pos('rtsp://', Lowercase(Trim(CameraPage.Values[0]))) <> 1 then
-    begin
-      MsgBox('Please enter a valid RTSP URL starting with rtsp://', mbError, MB_OK);
+      MsgBox(
+        'Please enter a valid RTSP URL starting with rtsp://, ' +
+        'or leave the field empty to use the local webcam.',
+        mbError,
+        MB_OK
+      );
       Result := False;
       Exit;
     end;
