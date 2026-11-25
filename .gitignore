@@ -6,44 +6,35 @@ __pycache__/
 Face-Collection/dataset/
 Web-UI/static/uploads/people/
 backup/
-# Local Smart Entry configuration
+
+# Local Smart Entry configuration (secrets)
 smart-entry.env
 smart-entry.*.env
-
-
-# PyInstaller build artifacts
-/build/
-/dist/
-
-# Local backup files
-*.backup
-
-# Local build logs
-build-log.txt
-
-# Local face profile exports
-insightface_profile_*.json
-# PyInstaller build artifacts
-/build/
-/dist/
-
-# Local backup files
-*.backup
-
-# Local build logs
-build-log.txt
-
-# Local face profile exports
-insightface_profile_*.json
-
-# Local client configuration (server URL)
 client.env
+!smart-entry.example.env
+
+# PyInstaller build artifacts
+/build/
+/dist/
+
+# Local backup files
+*.backup
+
+# DaSiamRPN tracker models (download separately, see README)
+Face-Recognition/tracker_models/
+
+# Local build logs
+build-log.txt
+build-log-*.txt
+run-*.txt
+setup-build-log.txt
+
+# Local face profile exports
+insightface_profile_*.json
+
+# Installer build output and payload
+installer-output/
+installer-payload/
 
 # Pre-installer backup files
 *_backup_before_installer.py
-
-# Installer build output
-installer-output/
-
-# InsightFace model payload for installer
-installer-payload/
